@@ -1,8 +1,8 @@
 {
   "name": "stm32-vscode-Live-watch",
   "displayName": "stm32-vscode-Live-watch",
-  "description": "STM32 实时变量监视 VS Code 插件，可通过 OpenOCD 和 ELF 调试信息实时查看与修改全局变量。",
-  "version": "1.0.0",
+  "description": "STM32 实时变量监视 VS Code 插件，支持 EIDE AXF 自动转换 ELF 后读取和修改全局变量。",
+  "version": "1.1.0",
   "publisher": "yezi",
   "author": "yezi",
   "icon": "resources/icon.jpg",
@@ -40,6 +40,11 @@
       {
         "command": "stm32-debug-helper.stopServer",
         "title": "STM32 Debug: Stop Server"
+      },
+      {
+        "command": "stm32-debug-helper.generateElf",
+        "title": "STM32 Debug: Generate ELF from AXF",
+        "icon": "$(tools)"
       },
       {
         "command": "stm32-debug-helper.refreshVariables",
@@ -89,6 +94,11 @@
     "menus": {
       "view/title": [
         {
+          "command": "stm32-debug-helper.generateElf",
+          "when": "view == stm32-debug-variables-panel",
+          "group": "navigation"
+        },
+        {
           "command": "stm32-debug-helper.addVariable",
           "when": "view == stm32-debug-variables-panel",
           "group": "navigation"
@@ -118,7 +128,7 @@
       ]
     },
     "configuration": {
-      "title": "STM32 Debug Helper",
+      "title": "stm32-vscode-Live-watch",
       "properties": {
         "stm32DebugHelper.pythonPath": {
           "type": "string",
@@ -129,6 +139,11 @@
           "type": "string",
           "default": "",
           "description": "Path to ELF file"
+        },
+        "stm32DebugHelper.fromelfPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to Keil fromelf.exe used to convert EIDE AXF to ELF"
         },
         "stm32DebugHelper.openocdHost": {
           "type": "string",
@@ -154,6 +169,7 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile && npm run lint",
+    "test:elf": "npm run compile && node out/elfResolver.test.js",
     "lint": "eslint src --ext ts",
     "package:server": "python3 build_server.py"
   },

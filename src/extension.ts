@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { generateElfFromEideAxf, resolveElfPathWithAxf, ResolveElfResult } from './elfResolver';
 import { ServerClient } from './serverClient';
 import { VariableTreeDataProvider, VariableTreeItem } from './variableTreeDataProvider';
 
@@ -31,6 +32,26 @@ export function activate(context: vscode.ExtensionContext) {
         variableTreeDataProvider.stopAutoRefresh();
         serverClient.stop();
         vscode.window.showInformationMessage('STM32 Debug Server stopped');
+    });
+
+    const generateElfCommand = vscode.commands.registerCommand('stm32-debug-helper.generateElf', async () => {
+        try {
+            const config = vscode.workspace.getConfiguration('stm32DebugHelper');
+            const result = generateElfFromEideAxf(
+                vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+                config.get<string>('fromelfPath', '')
+            );
+
+            await applyResolvedElfPath(config, result);
+            if (!result.elfPath) {
+                showResolveElfError(result);
+                return;
+            }
+
+            vscode.window.showInformationMessage(`ELF generated: ${result.elfPath}`);
+        } catch (error) {
+            vscode.window.showErrorMessage(`Failed to generate ELF: ${error}`);
+        }
     });
 
     const refreshVariablesCommand = vscode.commands.registerCommand('stm32-debug-helper.refreshVariables', async () => {
@@ -106,6 +127,7 @@ export function activate(context: vscode.ExtensionContext) {
         helloWorldCommand,
         startServerCommand,
         stopServerCommand,
+        generateElfCommand,
         refreshVariablesCommand,
         addVariableCommand,
         editVariableCommand,
@@ -151,16 +173,17 @@ async function ensureServerRunning(showSuccessMessage: boolean): Promise<void> {
         const config = vscode.workspace.getConfiguration('stm32DebugHelper');
         const host = config.get<string>('openocdHost', '127.0.0.1');
         const port = config.get<number>('openocdPort', 50001);
-        const elfPath = await resolveElfPath(config);
+        const elfResult = await resolveElfPath(config);
+        const elfPath = elfResult.elfPath;
 
         if (!elfPath) {
-            throw new Error('No ELF found. Expected build/*.elf or configured stm32DebugHelper.elfPath');
+            if (elfResult.missingFromelf) {
+                throw new Error('No fromelf.exe found. Configure stm32DebugHelper.fromelfPath or install Keil fromelf.exe');
+            }
+            throw new Error('No ELF found. Expected build/*.elf, configured stm32DebugHelper.elfPath, or EIDE AXF output');
         }
 
-        const currentConfigElfPath = config.get<string>('elfPath', '');
-        if (currentConfigElfPath !== elfPath) {
-            await config.update('elfPath', elfPath, vscode.ConfigurationTarget.Workspace);
-        }
+        await applyResolvedElfPath(config, elfResult);
 
         await serverClient.start(elfPath, host, port);
         await new Promise(resolve => setTimeout(resolve, 500));
@@ -179,37 +202,37 @@ async function ensureServerRunning(showSuccessMessage: boolean): Promise<void> {
     }
 }
 
-async function resolveElfPath(config: vscode.WorkspaceConfiguration): Promise<string | undefined> {
-    const configuredElfPath = config.get<string>('elfPath', '').trim();
-    if (configuredElfPath && fs.existsSync(configuredElfPath)) {
-        return configuredElfPath;
-    }
+async function resolveElfPath(config: vscode.WorkspaceConfiguration): Promise<ResolveElfResult> {
+    return resolveElfPathWithAxf({
+        configuredElfPath: config.get<string>('elfPath', ''),
+        configuredFromelfPath: config.get<string>('fromelfPath', ''),
+        workspaceFolder: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+    });
+}
 
-    const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (!workspaceFolder) {
-        return undefined;
-    }
-
-    const debugDir = path.join(workspaceFolder, 'build');
-    if (fs.existsSync(debugDir)) {
-        const elfFiles = fs.readdirSync(debugDir)
-            .filter(file => file.toLowerCase().endsWith('.elf'))
-            .sort();
-
-        if (elfFiles.length > 0) {
-            return path.join(debugDir, elfFiles[0]);
+async function applyResolvedElfPath(config: vscode.WorkspaceConfiguration, result: ResolveElfResult): Promise<void> {
+    if (result.elfPath) {
+        const currentConfigElfPath = config.get<string>('elfPath', '');
+        if (currentConfigElfPath !== result.elfPath) {
+            await config.update('elfPath', result.elfPath, vscode.ConfigurationTarget.Workspace);
         }
     }
 
-    const workspaceElfFiles = fs.readdirSync(workspaceFolder)
-        .filter(file => file.toLowerCase().endsWith('.elf'))
-        .sort();
+    if (result.fromelfPath) {
+        const currentFromelfPath = config.get<string>('fromelfPath', '');
+        if (currentFromelfPath !== result.fromelfPath) {
+            await config.update('fromelfPath', result.fromelfPath, vscode.ConfigurationTarget.Workspace);
+        }
+    }
+}
 
-    if (workspaceElfFiles.length > 0) {
-        return path.join(workspaceFolder, workspaceElfFiles[0]);
+function showResolveElfError(result: ResolveElfResult): void {
+    if (result.missingFromelf) {
+        vscode.window.showErrorMessage('Found EIDE AXF, but no fromelf.exe was found. Configure stm32DebugHelper.fromelfPath.');
+        return;
     }
 
-    return undefined;
+    vscode.window.showErrorMessage('No EIDE AXF found. Build the EIDE project first.');
 }
 
 export function deactivate() {

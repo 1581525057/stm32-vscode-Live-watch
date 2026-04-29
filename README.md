@@ -1,99 +1,95 @@
 # stm32-vscode-Live-watch
 
 发布者：yezi  
-版本：1.0.0  
-类型：VS Code STM32 实时变量监视插件
+版本：1.1  
+适用场景：VS Code + EIDE + Cortex-Debug + OpenOCD 的 STM32 实时变量观察
 
-`stm32-vscode-Live-watch` 是一个面向 STM32 开发调试的 VS Code 扩展。它通过 OpenOCD 的 TCL RPC 接口读取目标板内存，并结合 ELF 文件中的调试符号，把全局变量、结构体、数组等数据以树形视图展示在 VS Code 中，方便在调试时实时观察和修改变量值。
+`stm32-vscode-Live-watch` 是一个用于 STM32 调试阶段的 VS Code 插件。它的目标不是替代调试器，而是在已有调试流程上增加一个更顺手的实时变量监视面板：工程编译出 `.axf` 后，插件可以自动生成 `.elf`，再通过 ELF 调试信息和 OpenOCD 读取目标板变量。
 
-## 用途说明
+## 这个插件解决什么问题
 
-这个插件主要解决 STM32 调试时“变量观察不直观、刷新不方便、复杂结构展开麻烦”的问题。适合使用 VS Code、Cortex-Debug、OpenOCD、GCC/ARM 工具链进行 STM32 开发的场景。
+很多 STM32 工程在 VS Code/EIDE 中编译后产物是 `.axf`，而实时变量解析通常更依赖 ELF 调试信息。手动找文件、手动转换、手动配置路径会打断调试节奏。
 
-它的核心用途包括：
+这个插件把这套流程串起来：
 
-- 实时查看 STM32 目标板中的全局变量值。
-- 通过 ELF 调试信息自动解析变量类型和地址。
-- 支持结构体、数组、基础整型、浮点型等常见嵌入式数据。
-- 支持手动添加变量表达式，并持久保存监视列表。
-- 支持在 VS Code 中直接修改变量值，减少切换调试工具的成本。
+1. 找到当前工作区里的 EIDE 工程。
+2. 只从 EIDE 配置的输出目录里寻找 `.axf`。
+3. 使用 Keil `fromelf` 把 `.axf` 转成 `.elf`。
+4. 自动把生成的 `.elf` 写回 `stm32DebugHelper.elfPath`。
+5. 启动后端服务，读取全局变量并在 VS Code 面板中实时刷新。
 
-## 工作原理
+## 主要功能
 
-插件由两部分组成：
+- 实时查看 STM32 全局变量。
+- 支持添加、删除、重命名监视变量。
+- 支持结构体、数组和基础类型的树形展示。
+- 支持变量值自动刷新和手动刷新。
+- 支持通过 OpenOCD TCL RPC 读取目标板内存。
+- 支持 EIDE `.axf` 自动转换 `.elf`。
+- 支持手动执行 `Generate ELF from AXF`。
+- 支持自动写回生成后的 ELF 路径，减少重复配置。
 
-- VS Code 扩展端：负责界面、命令、变量树、用户交互和配置读取。
-- 后端服务端：负责解析 ELF 文件、连接 OpenOCD、读取或写入目标板内存。
+## AXF 转 ELF 机制
 
-数据链路如下：
+1. 插件会从 VS Code 当前工作区开始扫描 EIDE 工程。
+2. 只有包含 `.eide/eide.yml` 的目录会被认为是 EIDE 工程目录。
+3. 插件读取 `.eide/eide.yml` 中的 `outDir`。
+4. 如果没有配置 `outDir`，默认使用 `build`。
+5. 插件只在 EIDE 输出目录中查找 `.axf`。
+6. 插件不会读取 `MDK-ARM` 目录里的 `.axf`，避免误用 MDK 工程产物。
+7. 找到 `.axf` 后，插件会在同目录生成同名 `.elf`。
+
+示例：
 
 ```text
-VS Code 插件界面
-    |
-    | JSON 消息
-    v
-本地后端服务
-    |
-    | OpenOCD TCL RPC
-    v
-OpenOCD
-    |
-    | SWD / JTAG
-    v
-STM32 目标板
+你的工程/
+├─ .eide/
+│  └─ eide.yml
+├─ build/
+│  └─ app.axf
+└─ build/
+   └─ app.elf
 ```
 
-插件本身不直接烧录程序，也不替代 Cortex-Debug。它负责在已有调试环境上增加实时变量监视能力。
+转换命令等价于：
 
-## 功能特点
+```bash
+fromelf.exe --elf --output build/app.elf build/app.axf
+```
 
-### 实时变量监视
+插件会优先使用已经配置的 `stm32DebugHelper.fromelfPath`。如果没有配置，会尝试从系统 `PATH` 和常见 Keil 安装目录中寻找 `fromelf.exe`。
 
-- 自动刷新变量值，默认刷新间隔为 250ms。
-- 支持手动刷新全部变量。
-- 支持变量树展开，便于查看结构体和数组成员。
-- 监视列表会保存在工作区配置中，重新打开工程后可以继续使用。
+## 自动启动流程
 
-### ELF 符号解析
+启动调试或执行启动命令时，插件会按下面顺序寻找 ELF：
 
-- 自动读取 ELF 文件中的全局变量信息。
-- 支持配置固定 ELF 路径。
-- 当未配置 ELF 路径时，会尝试查找 `build/*.elf`。
-- 通过调试信息判断变量类型、大小和成员布局。
+1. 如果 `stm32DebugHelper.elfPath` 已配置且文件存在，直接使用。
+2. 如果工作区已有可用 `.elf`，优先复用。
+3. 如果没有可用 `.elf`，查找 EIDE 输出目录中的 `.axf`。
+4. 如果 `.axf` 比同名 `.elf` 更新，自动重新转换。
+5. 转换成功后，把 `.elf` 路径写回工作区配置。
+6. 使用最终 ELF 启动变量监视服务。
 
-### OpenOCD 通信
+这个流程的目的很简单：你只需要正常编译 EIDE 工程，然后启动调试，插件会尽量自动补齐 ELF 路径。
 
-- 默认连接 `127.0.0.1:50001`。
-- 使用 OpenOCD TCL RPC 读取目标板内存。
-- 支持批量读取连续内存，减少通信开销。
+## 面板按钮
 
-### 变量操作
+在 `STM32 Variables` 面板右上角可以看到 `Generate ELF from AXF` 按钮。它适合在以下情况手动使用：
 
-- 添加变量监视。
-- 编辑变量值。
-- 重命名变量显示表达式。
-- 删除不需要的变量。
-- 展开结构体或数组子项。
+- 刚刚重新编译 EIDE 工程。
+- 想立即刷新 `.elf` 文件。
+- 自动启动前想先确认 AXF 转 ELF 是否能正常执行。
+- 修改了 `fromelf.exe` 路径后想手动验证。
 
-## 环境要求
-
-使用前需要准备：
-
-- VS Code 1.85.0 或更高版本。
-- OpenOCD，并确认 TCL RPC 端口可用。
-- Cortex-Debug 扩展，推荐配合使用。
-- 带调试信息的 ELF 文件。
-- 如果不使用已打包的后端可执行文件，需要 Python 3.8+ 和 `pyelftools`。
-
-## 安装方式
+## 安装
 
 ### 从 VSIX 安装
 
-1. 获取插件 `.vsix` 文件。
+1. 获取 `stm32-vscode-Live-watch-1.1.0.vsix`。
 2. 打开 VS Code。
 3. 按 `Ctrl+Shift+P`。
 4. 执行 `Extensions: Install from VSIX...`。
-5. 选择 `.vsix` 文件完成安装。
+5. 选择 VSIX 文件安装。
 
 ### 从源码构建
 
@@ -105,85 +101,75 @@ npm run compile
 npx vsce package
 ```
 
-## 使用步骤
+## 使用前准备
 
-### 1. 启动 OpenOCD
+需要准备：
 
-根据芯片型号和调试器选择对应配置，例如：
+- VS Code 1.85.0 或更高版本。
+- EIDE 工程，并且工程目录包含 `.eide/eide.yml`。
+- OpenOCD，可通过 TCL RPC 端口访问。
+- Cortex-Debug，推荐用于启动 STM32 调试会话。
+- Keil `fromelf.exe`，用于把 `.axf` 转成 `.elf`。
 
-```bash
-openocd -f interface/stlink.cfg -f target/stm32f4x.cfg
-```
-
-需要确认 OpenOCD 的 TCL RPC 端口已经开启。插件默认使用端口 `50001`。
-
-### 2. 启动 VS Code 调试
-
-建议通过 Cortex-Debug 启动调试会话。目标板进入调试状态后，插件可以更稳定地读取变量。
-
-### 3. 启动插件服务
-
-在命令面板执行：
-
-```text
-STM32 Debug: Start Server
-```
-
-如果服务启动成功，插件会尝试连接 OpenOCD 并加载 ELF 调试信息。
-
-### 4. 添加变量
-
-在变量视图中点击添加按钮，或在命令面板执行：
-
-```text
-STM32 Debug: Add Variable
-```
-
-可以输入：
-
-```text
-counter
-motorSpeed
-pidStatus.kp
-adcBuffer
-```
-
-### 5. 查看和修改变量
-
-- 变量值会按刷新间隔自动更新。
-- 双击变量或右键菜单可以编辑变量值。
-- 结构体和数组可以展开查看子项。
-- 不再需要的变量可以右键删除。
+如果 `fromelf.exe` 不在系统路径中，可以手动配置。
 
 ## 配置项
 
-在 VS Code 设置中搜索 `STM32 Debug Helper`，可以修改以下配置：
+在 VS Code 设置中搜索 `stm32-vscode-Live-watch` 或 `STM32 Debug Helper`。
 
-| 配置项 | 类型 | 默认值 | 说明 |
-| --- | --- | --- | --- |
-| `stm32DebugHelper.pythonPath` | string | `python3` | Python 解释器路径，仅在使用脚本服务时需要 |
-| `stm32DebugHelper.elfPath` | string | 空 | ELF 文件路径，留空时尝试自动检测 |
-| `stm32DebugHelper.openocdHost` | string | `127.0.0.1` | OpenOCD TCL RPC 主机地址 |
-| `stm32DebugHelper.openocdPort` | number | `50001` | OpenOCD TCL RPC 端口 |
-| `stm32DebugHelper.refreshInterval` | number | `250` | 变量刷新间隔，单位毫秒 |
+| 配置项 | 默认值 | 用途 |
+| --- | --- | --- |
+| `stm32DebugHelper.elfPath` | 空 | 手动指定 ELF 文件路径 |
+| `stm32DebugHelper.fromelfPath` | 空 | 手动指定 Keil `fromelf.exe` 路径 |
+| `stm32DebugHelper.openocdHost` | `127.0.0.1` | OpenOCD TCL RPC 地址 |
+| `stm32DebugHelper.openocdPort` | `50001` | OpenOCD TCL RPC 端口 |
+| `stm32DebugHelper.refreshInterval` | `250` | 变量刷新间隔，单位毫秒 |
+| `stm32DebugHelper.pythonPath` | `python3` | 使用 Python 后端脚本时的解释器路径 |
 
-## 命令列表
+## 常用命令
 
-| 命令 | 用途 |
+| 命令 | 说明 |
 | --- | --- |
-| `STM32 Debug: Start Server` | 启动后端服务 |
-| `STM32 Debug: Stop Server` | 停止后端服务 |
-| `STM32 Debug: Refresh Variables` | 手动刷新全部变量 |
-| `STM32 Debug: Add Variable` | 添加变量监视 |
+| `STM32 Debug: Generate ELF from AXF` | 从 EIDE `.axf` 生成 `.elf` |
+| `STM32 Debug: Start Server` | 启动变量监视服务 |
+| `STM32 Debug: Stop Server` | 停止变量监视服务 |
+| `STM32 Debug: Add Variable` | 添加一个变量到监视列表 |
+| `STM32 Debug: Refresh Variables` | 手动刷新变量值 |
 | `STM32 Debug: Show Variables` | 显示变量面板 |
 
-## 构建说明
+## 推荐使用流程
 
-常用构建命令：
+1. 用 EIDE 正常编译 STM32 工程。
+2. 确认输出目录里生成了 `.axf`。
+3. 启动 OpenOCD。
+4. 在 VS Code 中启动 Cortex-Debug 调试。
+5. 打开 `STM32 Variables` 面板。
+6. 如果需要，点击 `Generate ELF from AXF`。
+7. 执行 `STM32 Debug: Start Server`。
+8. 添加要观察的变量名。
+
+变量示例：
+
+```text
+counter
+robotState
+motor.speed
+pidLoop.kp
+adcBuffer
+```
+
+## 构建和测试
+
+编译 TypeScript：
 
 ```bash
-npm install
 npm run compile
+```
+
+测试 AXF/ELF 路径解析逻辑：
+
+```bash
+npm run test:elf
 ```
 
 打包 VS Code 插件：
@@ -192,71 +178,82 @@ npm run compile
 npx vsce package
 ```
 
-打包后端服务：
+后端服务打包：
 
 ```bash
 npm run package:server
 ```
 
-后端可执行文件会放在 `bin/` 目录：
-
-- Windows：`bin/server-windows.exe`
-- macOS：`bin/server-macos`
-- Linux：`bin/server-linux`
-
 ## 项目结构
 
 ```text
 stm32-vscode-Live-watch/
-├─ src/                         # VS Code 扩展源码
-│  ├─ extension.ts              # 插件入口，注册命令和视图
-│  ├─ serverClient.ts           # 后端服务通信封装
-│  ├─ variableTreeDataProvider.ts # 变量树视图数据提供器
-│  └─ models/                   # 变量数据模型
+├─ src/
+│  ├─ extension.ts              # 插件入口，注册命令、视图和自动启动逻辑
+│  ├─ elfResolver.ts            # EIDE AXF 查找、fromelf 定位和 ELF 生成逻辑
+│  ├─ elfResolver.test.ts       # AXF/ELF 解析逻辑测试
+│  ├─ serverClient.ts           # VS Code 扩展与后端服务通信
+│  ├─ variableTreeDataProvider.ts # 变量树视图和刷新逻辑
+│  └─ models/
 ├─ resources/
-│  ├─ server.py                 # 后端服务脚本
-│  ├─ icon.jpg                  # 插件图标
-│  └─ icon.svg                  # 活动栏图标
-├─ bin/                         # 已打包的后端可执行文件
-├─ build_server.py              # 后端服务打包脚本
-├─ copy-server.js               # 发布前复制后端文件
-├─ package.json                 # VS Code 插件清单
-└─ README.md                    # 使用说明
+│  ├─ icon.jpg                  # 插件展示图标
+│  ├─ icon.svg                  # VS Code 活动栏图标
+│  └─ server.py                 # 后端变量读取服务
+├─ bin/                         # 后端可执行文件
+├─ package.json                 # 插件清单、命令、配置项和脚本
+└─ README.md                    # 当前说明文档
 ```
+
+## 注意事项
+
+- AXF 自动转换只面向 EIDE 工程。
+- 插件不会主动读取 `MDK-ARM` 目录。
+- 如果 EIDE 的 `outDir` 配错，插件也会跟着找错目录。
+- 如果找不到 `fromelf.exe`，需要配置 `stm32DebugHelper.fromelfPath`。
+- 如果变量显示异常，先确认 ELF 和当前烧录到板子的程序一致。
+- 如果启用了高等级编译优化，部分变量可能被优化掉，调试阶段建议保留调试信息并降低优化等级。
 
 ## 常见问题
 
-### 服务无法启动
+### 找不到 AXF
 
-- 确认插件目录中存在对应平台的后端可执行文件。
-- 如果使用 Python 模式，确认 Python 和 `pyelftools` 已安装。
-- 查看 VS Code 输出面板中的插件日志。
+确认工程里存在 `.eide/eide.yml`，并检查 `outDir` 指向的目录中是否真的有 `.axf`。
 
-### 连接不上 OpenOCD
+### 找不到 fromelf.exe
 
-- 确认 OpenOCD 正在运行。
-- 确认 `openocdHost` 和 `openocdPort` 配置正确。
-- 使用 `telnet 127.0.0.1 50001` 检查 TCL RPC 端口是否可访问。
+可以在 VS Code 设置中配置：
 
-### 变量显示为 N/A
+```text
+stm32DebugHelper.fromelfPath = D:\Keil5\ARM\ARMCLANG\bin\fromelf.exe
+```
 
-- 确认目标板程序和 ELF 文件匹配。
-- 确认变量是全局变量或可被 ELF 调试信息解析。
-- 确认目标板处于可读状态，必要时在断点处暂停。
+也可以把 `fromelf.exe` 所在目录加入系统 `PATH`。
 
-### 结构体无法正确展开
+### 生成了 ELF 但变量没有值
 
-- 确认编译时保留了调试信息，例如使用 `-g`。
-- 避免使用被编译器优化掉的变量。
-- 如开启高等级优化，建议调试阶段降低优化等级。
+检查三件事：
+
+- ELF 是否对应当前目标板程序。
+- OpenOCD 是否正在运行。
+- 目标板是否处于可读取调试状态。
+
+### 不想自动转换 AXF
+
+直接配置 `stm32DebugHelper.elfPath` 到一个固定 ELF 文件即可。只要该文件存在，插件会优先使用它。
+
+## 致谢
+
+感谢以下项目和工具提供基础能力与思路参考：
+
+- [pyelftools](https://github.com/eliben/pyelftools) - ELF 文件解析。
+- [OpenOCD](https://openocd.org/) - 片上调试工具。
+- [Cortex-Debug](https://github.com/Marus/cortex-debug) - ARM Cortex 调试扩展。
+- `stm32-debug-helper` - 实时变量监视插件的思路程序参考。
 
 ## 发布信息
 
 - 插件名：`stm32-vscode-Live-watch`
 - 发布者：`yezi`
-- 当前版本：`1.0.0`
-- 远程仓库：<https://github.com/1581525057/stm32-vscode-Live-watch>
-
-## 许可证
-
-本项目使用 MIT License，详见 [LICENSE.md](LICENSE.md)。
+- 版本：`1.1`
+- 仓库：<https://github.com/1581525057/stm32-vscode-Live-watch>
+- 许可证：MIT，详见 [LICENSE.md](LICENSE.md)

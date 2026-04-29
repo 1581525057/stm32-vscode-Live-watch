@@ -9,6 +9,8 @@ build/**
 **/__pycache__/**
 **/*.pyc
 **/*.tmp
+out/*.test.js
+out/*.test.js.map
 
 # 这些文件只用于开发或打包流程，插件运行时不依赖。
 tsconfig.json
