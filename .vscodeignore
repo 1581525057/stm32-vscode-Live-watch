@@ -1,0 +1,16 @@
+# 发布包只需要运行产物、资源和必要说明，源码与测试不进入 VSIX。
+src/**
+tests/**
+node_modules/**
+.vscode-test/**
+build/**
+*.vsix
+*.spec
+**/__pycache__/**
+**/*.pyc
+**/*.tmp
+
+# 这些文件只用于开发或打包流程，插件运行时不依赖。
+tsconfig.json
+build_server.py
+copy-server.js

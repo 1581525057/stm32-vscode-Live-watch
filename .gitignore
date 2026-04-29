@@ -1,0 +1,10 @@
+out/
+build/
+node_modules/
+.vscode-test/
+*.vsix
+*.spec
+__pycache__/
+*.pyc
+*.tmp
+bin/*.tmp
