@@ -13,7 +13,7 @@ export class VariableTreeItem extends vscode.TreeItem {
         public readonly isRoot: boolean,
         public readonly value?: any
     ) {
-        super(variableInfo.name, collapsibleState);
+        super(VariableTreeItem.buildLabel(variableInfo, value), collapsibleState);
 
         this.description = this.buildDescription();
         this.tooltip = this.buildTooltip();
@@ -30,31 +30,22 @@ export class VariableTreeItem extends vscode.TreeItem {
         }
     }
 
+    private static buildLabel(variableInfo: VariableInfo, value: any): string {
+        if (variableInfo.hasChildren) {
+            const containerValue = variableInfo.type === 'array' ? '[...]' : '{...}';
+            return `${variableInfo.name} ${containerValue}`;
+        }
+
+        if (value !== undefined && value !== null) {
+            const valueText = variableInfo.type === 'string' ? `"${value}"` : String(value);
+            return `${variableInfo.name} = ${valueText}`;
+        }
+
+        return `${variableInfo.name} = ?`;
+    }
+
     private buildDescription(): string {
-        const parts: string[] = [];
-
-        // 1. 值的显示逻辑优化
-        if (this.variableInfo.hasChildren) {
-            // 结构体或数组，显示占位符而不是空白
-            parts.push(this.variableInfo.type === 'array' ? '[...]' : '{...}');
-        } else if (this.value !== undefined && this.value !== null) {
-            // 如果是字符串类型，加上双引号以示区分
-            if (this.variableInfo.type === 'string') {
-                parts.push(`= "${this.value}"`);
-            } else {
-                parts.push(`= ${this.value}`);
-            }
-        } else {
-            // 没有获取到值时的占位符
-            parts.push('= ?');
-        }
-
-        // 2. 追加类型信息
-        if (this.variableInfo.typeName) {
-            parts.push(this.variableInfo.typeName);
-        }
-        
-        return parts.join(' | ');
+        return this.variableInfo.typeName || this.variableInfo.type || '';
     }
 
     private buildTooltip(): vscode.MarkdownString {
@@ -199,7 +190,7 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
         this.isRefreshing = true;
 
         try {
-            // 【关键修复 1】：严格过滤！只读取非结构体/非数组的叶子节点
+            // 【关键修复 1】：严格过滤，只读取可直接读写的普通变量。
             // 避免将 `sys_master.main_sensor.accel` 这种结构体路径发给后端导致后端跳过
             const pathsToRead: string[] = [];
             for (const [path, variable] of this.allVariables) {
@@ -453,7 +444,7 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
         const items: VariableTreeItem[] = [];
         const pathsToRead: string[] = [];
 
-        // 【关键修复 3】：只在初次展开时，主动去读取叶子节点的值
+        // 【关键修复 3】：只在初次展开时，主动读取可直接显示的普通变量值。
         for (const variable of variables) {
             if (!variable.hasChildren && !this.valueCache.has(variable.path)) {
                 pathsToRead.push(variable.path);
