@@ -260,23 +260,35 @@ fromelf.exe --elf --output build/app.elf build/app.axf
 
 ## 安装
 
-### 从 VSIX 安装
+### 方法一：从 GitHub Releases 下载 VSIX 安装（推荐）
 
-1. 获取 `stm32-vscode-Live-watch-2.1.0.vsix`。
-2. 打开 VS Code。
-3. 按 `Ctrl+Shift+P`。
-4. 执行 `Extensions: Install from VSIX...`。
-5. 选择 VSIX 文件安装。
+1. 打开 [Releases 页面](https://github.com/1581525057/stm32-vscode-Live-watch/releases)。
+2. 下载最新版本的 `.vsix` 文件，例如 `stm32-vscode-Live-watch-2.1.0.vsix`。
+3. 打开 VS Code。
+4. 按 `Ctrl+Shift+P`，输入 `vsix`，选择 `Extensions: Install from VSIX...`。
+5. 在文件选择窗口中，找到刚才下载的 `.vsix` 文件，点击打开。
+6. 安装完成后，左侧活动栏会出现 `STM32 Live Watch` 图标，表示安装成功。
 
-### 从源码构建
+### 方法二：从源码构建 VSIX
 
-```bash
-git clone https://github.com/1581525057/stm32-vscode-Live-watch.git
-cd stm32-vscode-Live-watch
-npm install
-npm run compile
-npx vsce package
-```
+如果你熟悉命令行，也可以自己打包：
+
+1. 克隆本仓库：
+   ```bash
+   git clone https://github.com/1581525057/stm32-vscode-Live-watch.git
+   cd stm32-vscode-Live-watch
+   ```
+
+2. 安装依赖并打包：
+   ```bash
+   npm install
+   npm run compile
+   npx vsce package
+   ```
+
+3. 执行完毕后，当前目录下会生成 `.vsix` 文件。
+
+4. 回到 VS Code，按 `Ctrl+Shift+P` → `Extensions: Install from VSIX...` → 选择刚生成的 `.vsix` 文件即可。
 
 ## 使用前准备
 
