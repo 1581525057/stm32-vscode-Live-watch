@@ -28,6 +28,18 @@
 7. 通过 OpenOCD TCL RPC 读取目标板内存。
 8. 在 VS Code 左侧栏实时刷新变量值。
 
+## 为什么使用 EIDE
+
+本扩展选择 EIDE 作为工程基础，主要有以下两点原因。
+
+### 1. EIDE 支持 Keil 工程兼容，便于旧项目平滑迁移
+
+EIDE 具有较好的 Keil 工程兼容能力，能够在较大程度上复用原有 Keil MDK 工程中的代码结构、头文件路径、启动文件、宏定义和编译配置，从而实现旧项目向 VS Code 开发环境的平滑迁移。这种兼容性降低了工程迁移成本，使已有代码能够继续使用，同时结合 VS Code 的插件生态、代码补全、Git 管理和调试扩展，提高了嵌入式项目的开发与维护效率。
+
+### 2. 支持 ARMClang 和 GCC 编译器，开发选择更加灵活
+
+EIDE 支持 ARMClang、ARMCC 和 GCC 等多种编译器工具链，开发者可以根据工程需求灵活选择编译环境。对于原有 Keil 项目，可以继续使用 ARMClang 以保证较高的代码兼容性；对于希望使用开源生态或跨平台开发的项目，也可以选择 GCC 工具链。这种多编译器支持增强了工程的适配能力，使嵌入式开发不再局限于单一 IDE 或单一工具链，提升了项目的灵活性、可移植性和可维护性。
+
 ## 工作原理
 
 扩展由三层组成：
@@ -422,16 +434,13 @@ stm32-vscode-Live-watch/
 └─ README.md
 ```
 
-## 致谢
-
-- [pyelftools](https://github.com/eliben/pyelftools) - ELF/DWARF 解析。
-- [OpenOCD](https://openocd.org/) - 片上调试工具。
-- [Cortex-Debug](https://github.com/Marus/cortex-debug) - ARM Cortex 调试扩展。
-
 ## 发布信息
 
 - 扩展名：`stm32-vscode-Live-watch`
 - 发布者：`yezi`
 - 版本：`2.1.0`
 - 仓库：<https://github.com/1581525057/stm32-vscode-Live-watch>
-- 许可证：MIT，详见 [LICENSE.md](LICENSE.md)
+
+## 致谢
+
+本项目参考了 [stm32-debug-helper](https://github.com/ZEALHT001/stm32-debug-helper)，感谢作者提供的思路。
