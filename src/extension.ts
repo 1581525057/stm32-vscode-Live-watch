@@ -1,45 +1,45 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { affectsLiveWatchConfig, getConfigValue, getLiveWatchConfig } from './config';
 import { generateElfFromEideAxf, resolveElfPathWithAxf, ResolveElfResult } from './elfResolver';
 import { ServerClient } from './serverClient';
-import { VariableTreeDataProvider, VariableTreeItem } from './variableTreeDataProvider';
+import { OperationsTreeDataProvider, VariableTreeDataProvider, VariableTreeItem } from './variableTreeDataProvider';
 
 let serverClient: ServerClient;
 let variableTreeDataProvider: VariableTreeDataProvider;
 let autoStartInProgress: Promise<void> | undefined;
 
 export function activate(context: vscode.ExtensionContext) {
-    console.log('STM32 Debug Helper is now active!');
+    console.log('STM32 Live Watch is now active!');
 
     const serverScriptPath = resolveServerScriptPath(context.extensionPath);
     serverClient = new ServerClient(serverScriptPath);
     variableTreeDataProvider = new VariableTreeDataProvider(serverClient, context.workspaceState);
+    const operationsTreeDataProvider = new OperationsTreeDataProvider();
+    let panelTreeView: vscode.TreeView<vscode.TreeItem> | undefined;
+    let lastSelectedVariableItem: VariableTreeItem | undefined;
 
-    const helloWorldCommand = vscode.commands.registerCommand('stm32-debug-helper.helloWorld', () => {
-        vscode.window.showInformationMessage('Hello World from STM32 Debug Helper!');
-    });
-
-    const startServerCommand = vscode.commands.registerCommand('stm32-debug-helper.startServer', async () => {
+    const startServerCommand = vscode.commands.registerCommand('stm32-live-watch.startServer', async () => {
         try {
             await ensureServerRunning(true);
         } catch (error) {
-            vscode.window.showErrorMessage(`Failed to start server: ${error}`);
+            showStartServerError(error);
         }
     });
 
-    const stopServerCommand = vscode.commands.registerCommand('stm32-debug-helper.stopServer', () => {
+    const stopServerCommand = vscode.commands.registerCommand('stm32-live-watch.stopServer', () => {
         variableTreeDataProvider.stopAutoRefresh();
         serverClient.stop();
-        vscode.window.showInformationMessage('STM32 Debug Server stopped');
+        vscode.window.showInformationMessage('STM32 Live Watch server stopped');
     });
 
-    const generateElfCommand = vscode.commands.registerCommand('stm32-debug-helper.generateElf', async () => {
+    const generateElfCommand = vscode.commands.registerCommand('stm32-live-watch.generateElf', async () => {
         try {
-            const config = vscode.workspace.getConfiguration('stm32DebugHelper');
+            const config = getLiveWatchConfig();
             const result = generateElfFromEideAxf(
                 vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
-                config.get<string>('fromelfPath', '')
+                getConfigValue<string>('fromelfPath', '')
             );
 
             await applyResolvedElfPath(config, result);
@@ -54,58 +54,102 @@ export function activate(context: vscode.ExtensionContext) {
         }
     });
 
-    const refreshVariablesCommand = vscode.commands.registerCommand('stm32-debug-helper.refreshVariables', async () => {
+    const configureElfPathCommand = vscode.commands.registerCommand('stm32-live-watch.configureElfPath', async () => {
+        const selectedFiles = await vscode.window.showOpenDialog({
+            canSelectFiles: true,
+            canSelectFolders: false,
+            canSelectMany: false,
+            filters: {
+                ELF: ['elf'],
+                All: ['*']
+            },
+            openLabel: 'Use ELF'
+        });
+
+        const elfPath = selectedFiles?.[0]?.fsPath;
+        if (!elfPath) {
+            return;
+        }
+
+        const config = getLiveWatchConfig();
+        await config.update('elfPath', elfPath, vscode.ConfigurationTarget.Workspace);
+        variableTreeDataProvider.stopAutoRefresh();
+        serverClient.stop();
+        vscode.window.showInformationMessage(`ELF path configured: ${elfPath}`);
+        variableTreeDataProvider.refresh();
+    });
+
+    const refreshVariablesCommand = vscode.commands.registerCommand('stm32-live-watch.refreshVariables', async () => {
         variableTreeDataProvider.clearValueCache();
     });
 
-    const addVariableCommand = vscode.commands.registerCommand('stm32-debug-helper.addVariable', async () => {
-        if (!serverClient.isRunning()) {
-            try {
-                await ensureServerRunning(false);
-            } catch (error) {
-                vscode.window.showErrorMessage(`Server not running: ${error}`);
-                return;
-            }
-        }
-
+    const addVariableCommand = vscode.commands.registerCommand('stm32-live-watch.addVariable', async () => {
         const input = await vscode.window.showInputBox({
             placeHolder: 'Enter variable name (e.g., counter, myStruct.value)',
-            prompt: 'Enter the variable name to add'
+            prompt: 'Enter the variable name to add',
+            value: getSelectedEditorText() ?? ''
         });
 
         if (input && input.trim()) {
-            await variableTreeDataProvider.addVariable(input.trim());
+            await addVariableExpression(input.trim());
         }
     });
 
-    const editVariableCommand = vscode.commands.registerCommand('stm32-debug-helper.editVariable', async (item?: VariableTreeItem) => {
-        if (!item) {
+    const addSelectedVariableCommand = vscode.commands.registerCommand('stm32-live-watch.addSelectedVariable', async () => {
+        const selectedText = getSelectedEditorText();
+        if (!selectedText) {
+            void vscode.commands.executeCommand('stm32-live-watch.addVariable');
             return;
         }
-        await variableTreeDataProvider.editVariableValue(item);
+
+        await addVariableExpression(selectedText);
     });
 
-    const renameVariableCommand = vscode.commands.registerCommand('stm32-debug-helper.renameVariable', async (item?: VariableTreeItem) => {
-        if (!item) {
+    const editVariableCommand = vscode.commands.registerCommand('stm32-live-watch.editVariable', async (item?: VariableTreeItem) => {
+        const targetItem = getSelectedVariableItem(item, panelTreeView, lastSelectedVariableItem);
+        if (!targetItem) {
+            vscode.window.showInformationMessage('Please select a variable to edit.');
             return;
         }
-        await variableTreeDataProvider.renameVariable(item);
+        await variableTreeDataProvider.editVariableValue(targetItem);
     });
 
-    const deleteVariableCommand = vscode.commands.registerCommand('stm32-debug-helper.deleteVariable', async (item?: VariableTreeItem) => {
-        if (!item) {
+    const renameVariableCommand = vscode.commands.registerCommand('stm32-live-watch.renameVariable', async (item?: VariableTreeItem) => {
+        const targetItem = getSelectedVariableItem(item, panelTreeView, lastSelectedVariableItem);
+        if (!targetItem) {
+            vscode.window.showInformationMessage('Please select a root variable to rename.');
             return;
         }
-        await variableTreeDataProvider.deleteVariable(item);
+        await variableTreeDataProvider.renameVariable(targetItem);
     });
 
-    const showBottomPanelCommand = vscode.commands.registerCommand('stm32-debug-helper.showBottomPanel', () => {
+    const deleteVariableCommand = vscode.commands.registerCommand('stm32-live-watch.deleteVariable', async (item?: VariableTreeItem) => {
+        const targetItem = getSelectedVariableItem(item, panelTreeView, lastSelectedVariableItem);
+        if (!targetItem) {
+            vscode.window.showInformationMessage('Please select a root variable to delete.');
+            return;
+        }
+        await variableTreeDataProvider.deleteVariable(targetItem);
+    });
+
+    const showBottomPanelCommand = vscode.commands.registerCommand('stm32-live-watch.showBottomPanel', () => {
         void vscode.commands.executeCommand('stm32-debug-variables-panel.focus');
     });
 
-    const panelTreeView = vscode.window.createTreeView('stm32-debug-variables-panel', {
+    panelTreeView = vscode.window.createTreeView('stm32-debug-variables-panel', {
         treeDataProvider: variableTreeDataProvider,
         showCollapseAll: true
+    });
+    const operationsTreeView = vscode.window.createTreeView('stm32-debug-operations-panel', {
+        treeDataProvider: operationsTreeDataProvider,
+        showCollapseAll: false
+    });
+
+    const selectionDisposable = panelTreeView.onDidChangeSelection((event) => {
+        const selectedItem = event.selection[0];
+        if (selectedItem instanceof VariableTreeItem) {
+            lastSelectedVariableItem = selectedItem;
+        }
     });
 
     const debugStartDisposable = vscode.debug.onDidStartDebugSession((session) => {
@@ -116,25 +160,27 @@ export function activate(context: vscode.ExtensionContext) {
     });
 
     const configChangeDisposable = vscode.workspace.onDidChangeConfiguration((event) => {
-        if (event.affectsConfiguration('stm32DebugHelper.refreshInterval')) {
-            const config = vscode.workspace.getConfiguration('stm32DebugHelper');
-            const newInterval = config.get<number>('refreshInterval', 250);
+        if (affectsLiveWatchConfig(event, 'refreshInterval')) {
+            const newInterval = getConfigValue<number>('refreshInterval', 250);
             variableTreeDataProvider.updateRefreshInterval(newInterval);
         }
     });
 
     context.subscriptions.push(
-        helloWorldCommand,
         startServerCommand,
         stopServerCommand,
         generateElfCommand,
+        configureElfPathCommand,
         refreshVariablesCommand,
         addVariableCommand,
+        addSelectedVariableCommand,
         editVariableCommand,
         renameVariableCommand,
         deleteVariableCommand,
         showBottomPanelCommand,
         panelTreeView,
+        operationsTreeView,
+        selectionDisposable,
         debugStartDisposable,
         configChangeDisposable
     );
@@ -155,11 +201,51 @@ function resolveServerScriptPath(extensionPath: string): string {
     return candidates[0] ?? 'server.py';
 }
 
+function getSelectedVariableItem(
+    item: VariableTreeItem | undefined,
+    treeView: vscode.TreeView<vscode.TreeItem> | undefined,
+    lastSelectedVariableItem: VariableTreeItem | undefined
+): VariableTreeItem | undefined {
+    if (item instanceof VariableTreeItem) {
+        return item;
+    }
+
+    const selectedItem = treeView?.selection[0];
+    return selectedItem instanceof VariableTreeItem ? selectedItem : lastSelectedVariableItem;
+}
+
+function getSelectedEditorText(): string | undefined {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || editor.selection.isEmpty) {
+        return undefined;
+    }
+
+    const selectedText = editor.document.getText(editor.selection).trim();
+    if (!selectedText || selectedText.includes('\n') || selectedText.includes('\r')) {
+        return undefined;
+    }
+
+    return selectedText;
+}
+
+async function addVariableExpression(expression: string): Promise<void> {
+    if (!serverClient.isRunning()) {
+        try {
+            await ensureServerRunning(false);
+        } catch (error) {
+            vscode.window.showErrorMessage(`Server not running: ${error}`);
+            return;
+        }
+    }
+
+    await variableTreeDataProvider.addVariable(expression);
+}
+
 async function ensureServerRunning(showSuccessMessage: boolean): Promise<void> {
     if (serverClient.isRunning()) {
         await variableTreeDataProvider.loadRootVariables();
         if (showSuccessMessage) {
-            vscode.window.showInformationMessage('STM32 Debug Server already running');
+            vscode.window.showInformationMessage('STM32 Live Watch server already running');
         }
         return;
     }
@@ -170,17 +256,17 @@ async function ensureServerRunning(showSuccessMessage: boolean): Promise<void> {
     }
 
     autoStartInProgress = (async () => {
-        const config = vscode.workspace.getConfiguration('stm32DebugHelper');
-        const host = config.get<string>('openocdHost', '127.0.0.1');
-        const port = config.get<number>('openocdPort', 50001);
+        const config = getLiveWatchConfig();
+        const host = getConfigValue<string>('openocdHost', '127.0.0.1');
+        const port = getConfigValue<number>('openocdPort', 50001);
         const elfResult = await resolveElfPath(config);
         const elfPath = elfResult.elfPath;
 
         if (!elfPath) {
             if (elfResult.missingFromelf) {
-                throw new Error('No fromelf.exe found. Configure stm32DebugHelper.fromelfPath or install Keil fromelf.exe');
+                throw new Error('No fromelf.exe found. Configure stm32LiveWatch.fromelfPath or install Keil fromelf.exe');
             }
-            throw new Error('No ELF found. Expected build/*.elf, configured stm32DebugHelper.elfPath, or EIDE AXF output');
+            throw new Error('No ELF found. Expected build/*.elf, configured stm32LiveWatch.elfPath, or EIDE AXF output');
         }
 
         await applyResolvedElfPath(config, elfResult);
@@ -191,7 +277,7 @@ async function ensureServerRunning(showSuccessMessage: boolean): Promise<void> {
         await variableTreeDataProvider.loadRootVariables();
 
         if (showSuccessMessage) {
-            vscode.window.showInformationMessage('STM32 Debug Server started successfully');
+            vscode.window.showInformationMessage('STM32 Live Watch server started successfully');
         }
     })();
 
@@ -204,8 +290,8 @@ async function ensureServerRunning(showSuccessMessage: boolean): Promise<void> {
 
 async function resolveElfPath(config: vscode.WorkspaceConfiguration): Promise<ResolveElfResult> {
     return resolveElfPathWithAxf({
-        configuredElfPath: config.get<string>('elfPath', ''),
-        configuredFromelfPath: config.get<string>('fromelfPath', ''),
+        configuredElfPath: getConfigValue<string>('elfPath', ''),
+        configuredFromelfPath: getConfigValue<string>('fromelfPath', ''),
         workspaceFolder: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
     });
 }
@@ -228,11 +314,31 @@ async function applyResolvedElfPath(config: vscode.WorkspaceConfiguration, resul
 
 function showResolveElfError(result: ResolveElfResult): void {
     if (result.missingFromelf) {
-        vscode.window.showErrorMessage('Found EIDE AXF, but no fromelf.exe was found. Configure stm32DebugHelper.fromelfPath.');
+        vscode.window.showErrorMessage('Found EIDE AXF, but no fromelf.exe was found. Configure stm32LiveWatch.fromelfPath.');
         return;
     }
 
-    vscode.window.showErrorMessage('No EIDE AXF found. Build the EIDE project first.');
+    void vscode.window.showErrorMessage('No EIDE AXF found. Build the EIDE project first or configure an ELF path manually.', 'Configure ELF Path')
+        .then(selection => {
+            if (selection === 'Configure ELF Path') {
+                void vscode.commands.executeCommand('stm32-live-watch.configureElfPath');
+            }
+        });
+}
+
+function showStartServerError(error: unknown): void {
+    const message = String(error);
+    if (!message.includes('No ELF found')) {
+        vscode.window.showErrorMessage(`Failed to start server: ${error}`);
+        return;
+    }
+
+    void vscode.window.showErrorMessage(`Failed to start server: ${error}`, 'Configure ELF Path')
+        .then(selection => {
+            if (selection === 'Configure ELF Path') {
+                void vscode.commands.executeCommand('stm32-live-watch.configureElfPath');
+            }
+        });
 }
 
 export function deactivate() {

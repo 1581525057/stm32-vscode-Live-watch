@@ -6,8 +6,9 @@ from resources.server import DebugDataServer, ElfExpert
 
 
 class FakeAttr:
-    def __init__(self, value):
+    def __init__(self, value, form=None):
         self.value = value
+        self.form = form
 
 
 class FakeCu:
@@ -83,6 +84,272 @@ class ElfExpertCppTests(unittest.TestCase):
         self.assertEqual("struct", node.type)
         self.assertIn("speed", node.children)
         self.assertEqual(0x20000004, node.children["speed"].addr)
+
+    def test_expand_cpp_class_keeps_zero_offset_member_without_location_attr(self):
+        cu = FakeCu()
+        int_die = FakeDie(
+            "DW_TAG_base_type",
+            {
+                "DW_AT_name": str_attr("int"),
+                "DW_AT_byte_size": FakeAttr(4),
+            },
+            offset=1,
+            cu=cu,
+        )
+        pid_t_die = FakeDie(
+            "DW_TAG_structure_type",
+            {
+                "DW_AT_name": str_attr("PID_t"),
+                "DW_AT_byte_size": FakeAttr(4),
+            },
+            [
+                FakeDie(
+                    "DW_TAG_member",
+                    {
+                        "DW_AT_name": str_attr("kp"),
+                        "DW_AT_data_member_location": FakeAttr(0),
+                        "DW_AT_type": FakeAttr(1),
+                    },
+                    cu=cu,
+                )
+            ],
+            offset=2,
+            cu=cu,
+        )
+        pid_class_die = FakeDie(
+            "DW_TAG_class_type",
+            {
+                "DW_AT_name": str_attr("PID"),
+                "DW_AT_byte_size": FakeAttr(4),
+            },
+            [
+                FakeDie(
+                    "DW_TAG_member",
+                    {
+                        "DW_AT_name": str_attr("pid"),
+                        "DW_AT_type": FakeAttr(2),
+                    },
+                    cu=cu,
+                )
+            ],
+            offset=3,
+            cu=cu,
+        )
+
+        expert = object.__new__(ElfExpert)
+        expert.type_die_map = {(0, 1): int_die, (0, 2): pid_t_die, (0, 3): pid_class_die}
+
+        node = expert._expand_node("pidController", 0x20000000, 3, 0, 0)
+
+        self.assertIsNotNone(node)
+        self.assertIn("pid", node.children)
+        self.assertEqual(0x20000000, node.children["pid"].addr)
+        self.assertIn("kp", node.children["pid"].children)
+
+    def test_expand_cpp_class_declaration_uses_full_definition(self):
+        cu = FakeCu()
+        int_die = FakeDie(
+            "DW_TAG_base_type",
+            {
+                "DW_AT_name": str_attr("int"),
+                "DW_AT_byte_size": FakeAttr(4),
+            },
+            offset=1,
+            cu=cu,
+        )
+        declaration_die = FakeDie(
+            "DW_TAG_class_type",
+            {
+                "DW_AT_name": str_attr("PID"),
+                "DW_AT_declaration": FakeAttr(True),
+            },
+            offset=2,
+            cu=cu,
+        )
+        definition_die = FakeDie(
+            "DW_TAG_class_type",
+            {
+                "DW_AT_name": str_attr("PID"),
+                "DW_AT_byte_size": FakeAttr(4),
+            },
+            [
+                FakeDie(
+                    "DW_TAG_member",
+                    {
+                        "DW_AT_name": str_attr("pid"),
+                        "DW_AT_data_member_location": FakeAttr(0),
+                        "DW_AT_type": FakeAttr(1),
+                    },
+                    cu=cu,
+                )
+            ],
+            offset=3,
+            cu=cu,
+        )
+
+        expert = object.__new__(ElfExpert)
+        expert.type_die_map = {(0, 1): int_die, (0, 2): declaration_die, (0, 3): definition_die}
+        expert.type_definition_map = {("DW_TAG_class_type", "PID"): definition_die}
+
+        node = expert._expand_node("pidController", 0x20000000, 2, 0, 0)
+
+        self.assertIsNotNone(node)
+        self.assertEqual(4, node.size)
+        self.assertIn("pid", node.children)
+
+    def test_expand_cpp_class_member_uses_absolute_type_reference(self):
+        cu = FakeCu()
+        cu.cu_offset = 100
+        int_die = FakeDie(
+            "DW_TAG_base_type",
+            {
+                "DW_AT_name": str_attr("int"),
+                "DW_AT_byte_size": FakeAttr(4),
+            },
+            offset=130,
+            cu=cu,
+        )
+        class_die = FakeDie(
+            "DW_TAG_class_type",
+            {
+                "DW_AT_name": str_attr("PID"),
+                "DW_AT_byte_size": FakeAttr(4),
+            },
+            [
+                FakeDie(
+                    "DW_TAG_member",
+                    {
+                        "DW_AT_name": str_attr("pid"),
+                        "DW_AT_data_member_location": FakeAttr(0),
+                        "DW_AT_type": FakeAttr(130, "DW_FORM_ref_addr"),
+                    },
+                    cu=cu,
+                )
+            ],
+            offset=140,
+            cu=cu,
+        )
+
+        expert = object.__new__(ElfExpert)
+        expert.type_die_map = {(100, 130): int_die, (100, 140): class_die}
+
+        node = expert._expand_node("pid_chassis_0", 0x20000000, 140, 100, 0)
+
+        self.assertIsNotNone(node)
+        self.assertIn("pid", node.children)
+
+    def test_expand_cpp_class_member_reads_name_type_from_specification(self):
+        cu = FakeCu()
+        float_die = FakeDie(
+            "DW_TAG_base_type",
+            {
+                "DW_AT_name": str_attr("float"),
+                "DW_AT_byte_size": FakeAttr(4),
+            },
+            offset=1,
+            cu=cu,
+        )
+        pid_t_die = FakeDie(
+            "DW_TAG_structure_type",
+            {
+                "DW_AT_name": str_attr("PID_t"),
+                "DW_AT_byte_size": FakeAttr(4),
+            },
+            [
+                FakeDie(
+                    "DW_TAG_member",
+                    {
+                        "DW_AT_name": str_attr("Kp"),
+                        "DW_AT_data_member_location": FakeAttr(0),
+                        "DW_AT_type": FakeAttr(1),
+                    },
+                    cu=cu,
+                )
+            ],
+            offset=2,
+            cu=cu,
+        )
+        member_declaration_die = FakeDie(
+            "DW_TAG_member",
+            {
+                "DW_AT_name": str_attr("pid"),
+                "DW_AT_data_member_location": FakeAttr(0),
+                "DW_AT_type": FakeAttr(2),
+            },
+            offset=3,
+            cu=cu,
+        )
+        pid_class_die = FakeDie(
+            "DW_TAG_class_type",
+            {
+                "DW_AT_name": str_attr("PID"),
+                "DW_AT_byte_size": FakeAttr(4),
+            },
+            [
+                FakeDie(
+                    "DW_TAG_member",
+                    {
+                        "DW_AT_specification": FakeAttr(3),
+                    },
+                    cu=cu,
+                )
+            ],
+            offset=4,
+            cu=cu,
+        )
+
+        expert = object.__new__(ElfExpert)
+        expert.type_die_map = {
+            (0, 1): float_die,
+            (0, 2): pid_t_die,
+            (0, 3): member_declaration_die,
+            (0, 4): pid_class_die,
+        }
+
+        node = expert._expand_node("pidController", 0x20000000, 4, 0, 0)
+
+        self.assertIsNotNone(node)
+        self.assertIn("pid", node.children)
+        self.assertIn("Kp", node.children["pid"].children)
+
+    def test_resolve_variable_address_matches_cpp_mangled_symbol_suffix(self):
+        cu = FakeCu()
+        die = FakeDie(
+            "DW_TAG_variable",
+            {
+                "DW_AT_name": str_attr("pid_chassis_0"),
+            },
+            cu=cu,
+        )
+        expert = object.__new__(ElfExpert)
+
+        addr = expert._resolve_variable_address(die, cu, {"_ZN7Chassis13pid_chassis_0E": 0x20000100})
+
+        self.assertEqual(0x20000100, addr)
+
+    def test_resolve_variable_address_uses_specification_name(self):
+        cu = FakeCu()
+        declaration_die = FakeDie(
+            "DW_TAG_variable",
+            {
+                "DW_AT_name": str_attr("pid_chassis_0"),
+            },
+            offset=1,
+            cu=cu,
+        )
+        definition_die = FakeDie(
+            "DW_TAG_variable",
+            {
+                "DW_AT_specification": FakeAttr(1),
+            },
+            cu=cu,
+        )
+        expert = object.__new__(ElfExpert)
+        expert.type_die_map = {(0, 1): declaration_die}
+
+        addr = expert._resolve_variable_address(definition_die, cu, {"_ZN7Chassis13pid_chassis_0E": 0x20000100})
+
+        self.assertEqual(0x20000100, addr)
 
     def test_expand_cpp_class_members_keeps_nested_struct_and_count_array_children(self):
         cu = FakeCu()

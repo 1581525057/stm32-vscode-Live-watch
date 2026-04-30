@@ -1,8 +1,10 @@
 import * as vscode from 'vscode';
+import { getConfigValue } from './config';
 import { VariableInfo } from './models/variable';
 import { ServerClient } from './serverClient';
 
-const WATCHED_VARIABLES_KEY = 'stm32DebugHelper.watchedVariables';
+const WATCHED_VARIABLES_KEY = 'stm32LiveWatch.watchedVariables';
+const LEGACY_WATCHED_VARIABLES_KEY = 'stm32DebugHelper.watchedVariables';
 
 export class VariableTreeItem extends vscode.TreeItem {
     constructor(
@@ -89,7 +91,7 @@ export class VariableTreeItem extends vscode.TreeItem {
         }
 
         return {
-            command: 'stm32-debug-helper.editVariable',
+            command: 'stm32-live-watch.editVariable',
             title: 'Edit Variable Value',
             arguments: [this]
         };
@@ -110,9 +112,29 @@ export class AddVariableTreeItem extends vscode.TreeItem {
         this.iconPath = new vscode.ThemeIcon('add');
         this.contextValue = 'addVariable';
         this.command = {
-            command: 'stm32-debug-helper.addVariable',
+            command: 'stm32-live-watch.addVariable',
             title: 'Add Variable'
         };
+    }
+}
+
+export class OperationTreeItem extends vscode.TreeItem {
+    constructor(label: string, icon: string, command: string) {
+        super(label, vscode.TreeItemCollapsibleState.None);
+        this.contextValue = 'operation';
+        this.iconPath = new vscode.ThemeIcon(icon);
+        this.command = {
+            command,
+            title: label
+        };
+    }
+}
+
+export class InfoTreeItem extends vscode.TreeItem {
+    constructor(label: string) {
+        super(label, vscode.TreeItemCollapsibleState.None);
+        this.contextValue = 'info';
+        this.iconPath = new vscode.ThemeIcon('info');
     }
 }
 
@@ -132,8 +154,7 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
         private serverClient: ServerClient,
         private workspaceState: vscode.Memento
     ) {
-        const config = vscode.workspace.getConfiguration('stm32DebugHelper');
-        this.refreshInterval = config.get<number>('refreshInterval', 250);
+        this.refreshInterval = getConfigValue<number>('refreshInterval', 250);
     }
 
     refresh(): void {
@@ -236,7 +257,10 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
     }
 
     async loadRootVariables(): Promise<void> {
-        const watchedPaths = this.workspaceState.get<string[]>(WATCHED_VARIABLES_KEY, []);
+        const watchedPaths = this.workspaceState.get<string[]>(
+            WATCHED_VARIABLES_KEY,
+            this.workspaceState.get<string[]>(LEGACY_WATCHED_VARIABLES_KEY, [])
+        );
         this.rootVariables = [];
         this.allVariables.clear();
         this.valueCache.clear();
@@ -402,16 +426,15 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
     }
 
     async getChildren(element?: vscode.TreeItem): Promise<vscode.TreeItem[]> {
-        if (!this.serverClient.isRunning()) {
-            return [new WaitingTreeItem()];
-        }
-
         if (!element) {
-            if (this.rootVariables.length === 0) {
-                return [new AddVariableTreeItem()];
+            if (!this.serverClient.isRunning()) {
+                return [new WaitingTreeItem()];
             }
-            const rootItems = await this.createTreeItems(this.rootVariables, true);
-            return [...rootItems, new AddVariableTreeItem()];
+
+            if (this.rootVariables.length === 0) {
+                return [new InfoTreeItem('No watched variables')];
+            }
+            return this.createTreeItems(this.rootVariables, true);
         }
 
         if (element instanceof VariableTreeItem) {
@@ -463,5 +486,29 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
     async updateValue(path: string, newValue: any): Promise<void> {
         this.valueCache.set(path, newValue);
         this.refresh();
+    }
+}
+
+export class OperationsTreeDataProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
+    private _onDidChangeTreeData: vscode.EventEmitter<vscode.TreeItem | undefined | null | void> = new vscode.EventEmitter<vscode.TreeItem | undefined | null | void>();
+    readonly onDidChangeTreeData: vscode.Event<vscode.TreeItem | undefined | null | void> = this._onDidChangeTreeData.event;
+
+    refresh(): void {
+        this._onDidChangeTreeData.fire();
+    }
+
+    getTreeItem(element: vscode.TreeItem): vscode.TreeItem {
+        return element;
+    }
+
+    getChildren(element?: vscode.TreeItem): vscode.TreeItem[] {
+        if (element) {
+            return [];
+        }
+
+        return [
+            new OperationTreeItem('Configure ELF Path', 'file-code', 'stm32-live-watch.configureElfPath'),
+            new OperationTreeItem('Generate ELF from AXF', 'tools', 'stm32-live-watch.generateElf')
+        ];
     }
 }

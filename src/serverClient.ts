@@ -3,6 +3,7 @@ import { spawn, ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { VariableInfo, ReadResult, ServerResponse } from './models/variable';
+import { getConfigValue } from './config';
 
 export class ServerClient {
     private process: ChildProcess | null = null;
@@ -53,7 +54,7 @@ export class ServerClient {
             const serverExe = this.getServerExecutable();
             const useExecutable = serverExe !== null;
 
-            let pythonPath = vscode.workspace.getConfiguration('stm32DebugHelper').get<string>('pythonPath', 'python3');
+            let pythonPath = getConfigValue<string>('pythonPath', 'python3');
             if (process.platform === 'win32' && pythonPath === 'python3') {
                 pythonPath = 'python';
             }

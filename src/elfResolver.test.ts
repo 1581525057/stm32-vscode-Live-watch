@@ -5,7 +5,7 @@ import * as path from 'path';
 import { convertAxfToElf, findEideAxfFiles, getElfPathForAxf, resolveFromelfPath } from './elfResolver';
 
 function makeTempDir(): string {
-    return fs.mkdtempSync(path.join(os.tmpdir(), 'stm32-debug-helper-'));
+    return fs.mkdtempSync(path.join(os.tmpdir(), 'stm32-live-watch-'));
 }
 
 function writeFile(filePath: string, content = ''): void {

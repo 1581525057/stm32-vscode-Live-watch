@@ -1,8 +1,8 @@
 {
   "name": "stm32-vscode-Live-watch",
-  "displayName": "stm32-vscode-Live-watch",
+  "displayName": "STM32 Live Watch",
   "description": "STM32 实时变量监视 VS Code 插件，支持 EIDE AXF 自动转换 ELF 后读取和修改全局变量。",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "publisher": "yezi",
   "author": "yezi",
   "icon": "resources/icon.jpg",
@@ -34,50 +34,66 @@
   "contributes": {
     "commands": [
       {
-        "command": "stm32-debug-helper.startServer",
-        "title": "STM32 Debug: Start Server"
+        "command": "stm32-live-watch.startServer",
+        "title": "STM32 Live Watch: Start Server",
+        "icon": "$(debug-start)"
       },
       {
-        "command": "stm32-debug-helper.stopServer",
-        "title": "STM32 Debug: Stop Server"
+        "command": "stm32-live-watch.stopServer",
+        "title": "STM32 Live Watch: Stop Server",
+        "icon": "$(debug-stop)"
       },
       {
-        "command": "stm32-debug-helper.generateElf",
-        "title": "STM32 Debug: Generate ELF from AXF",
+        "command": "stm32-live-watch.generateElf",
+        "title": "STM32 Live Watch: Generate ELF from AXF",
         "icon": "$(tools)"
       },
       {
-        "command": "stm32-debug-helper.refreshVariables",
-        "title": "STM32 Debug: Refresh Variables",
+        "command": "stm32-live-watch.configureElfPath",
+        "title": "STM32 Live Watch: Configure ELF Path",
+        "icon": "$(file-code)"
+      },
+      {
+        "command": "stm32-live-watch.refreshVariables",
+        "title": "STM32 Live Watch: Refresh Variables",
         "icon": "$(refresh)"
       },
       {
-        "command": "stm32-debug-helper.addVariable",
-        "title": "STM32 Debug: Add Variable",
+        "command": "stm32-live-watch.addVariable",
+        "title": "STM32 Live Watch: Add Variable",
         "icon": "$(add)"
       },
       {
-        "command": "stm32-debug-helper.editVariable",
-        "title": "Edit Variable Value"
+        "command": "stm32-live-watch.addSelectedVariable",
+        "title": "STM32 Live Watch: Add Selected Variable",
+        "icon": "$(add)"
       },
       {
-        "command": "stm32-debug-helper.renameVariable",
-        "title": "Rename Variable Expression"
+        "command": "stm32-live-watch.editVariable",
+        "title": "STM32 Live Watch: Edit Variable Value",
+        "icon": "$(edit)"
       },
       {
-        "command": "stm32-debug-helper.deleteVariable",
-        "title": "Delete Variable"
+        "command": "stm32-live-watch.renameVariable",
+        "title": "STM32 Live Watch: Rename Variable Expression",
+        "icon": "$(symbol-key)"
       },
       {
-        "command": "stm32-debug-helper.showBottomPanel",
-        "title": "STM32 Debug: Show Variables"
+        "command": "stm32-live-watch.deleteVariable",
+        "title": "STM32 Live Watch: Delete Variable",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "stm32-live-watch.showBottomPanel",
+        "title": "STM32 Live Watch: Show Variables",
+        "icon": "$(eye)"
       }
     ],
     "viewsContainers": {
       "activitybar": [
         {
           "id": "stm32-debug-panel",
-          "title": "STM32 Variables",
+          "title": "STM32 Live Watch",
           "icon": "resources/icon.svg"
         }
       ]
@@ -86,7 +102,12 @@
       "stm32-debug-panel": [
         {
           "id": "stm32-debug-variables-panel",
-          "name": "Variables",
+          "name": "1. stm32livewatch实时变量查看",
+          "icon": "resources/icon.svg"
+        },
+        {
+          "id": "stm32-debug-operations-panel",
+          "name": "2. 操作",
           "icon": "resources/icon.svg"
         }
       ]
@@ -94,68 +115,80 @@
     "menus": {
       "view/title": [
         {
-          "command": "stm32-debug-helper.generateElf",
+          "command": "stm32-live-watch.startServer",
           "when": "view == stm32-debug-variables-panel",
-          "group": "navigation"
+          "group": "navigation@1"
         },
         {
-          "command": "stm32-debug-helper.addVariable",
+          "command": "stm32-live-watch.stopServer",
           "when": "view == stm32-debug-variables-panel",
-          "group": "navigation"
+          "group": "navigation@2"
         },
         {
-          "command": "stm32-debug-helper.refreshVariables",
+          "command": "stm32-live-watch.addVariable",
           "when": "view == stm32-debug-variables-panel",
-          "group": "navigation"
+          "group": "navigation@3"
+        },
+        {
+          "command": "stm32-live-watch.refreshVariables",
+          "when": "view == stm32-debug-variables-panel",
+          "group": "navigation@4"
         }
       ],
       "view/item/context": [
         {
-          "command": "stm32-debug-helper.editVariable",
+          "command": "stm32-live-watch.editVariable",
           "when": "view == stm32-debug-variables-panel && (viewItem == variable || viewItem == rootVariable)",
           "group": "inline"
         },
         {
-          "command": "stm32-debug-helper.renameVariable",
+          "command": "stm32-live-watch.renameVariable",
           "when": "view == stm32-debug-variables-panel && viewItem =~ /^rootVariable/",
           "group": "navigation"
         },
         {
-          "command": "stm32-debug-helper.deleteVariable",
+          "command": "stm32-live-watch.deleteVariable",
           "when": "view == stm32-debug-variables-panel && viewItem =~ /^rootVariable/",
           "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "stm32-live-watch.addSelectedVariable",
+          "when": "editorHasSelection && resourceLangId =~ /^(c|cpp|cuda-cpp)$/",
+          "group": "navigation@50"
         }
       ]
     },
     "configuration": {
-      "title": "stm32-vscode-Live-watch",
+      "title": "STM32 Live Watch",
       "properties": {
-        "stm32DebugHelper.pythonPath": {
+        "stm32LiveWatch.pythonPath": {
           "type": "string",
           "default": "python3",
           "description": "Path to Python interpreter"
         },
-        "stm32DebugHelper.elfPath": {
+        "stm32LiveWatch.elfPath": {
           "type": "string",
           "default": "",
           "description": "Path to ELF file"
         },
-        "stm32DebugHelper.fromelfPath": {
+        "stm32LiveWatch.fromelfPath": {
           "type": "string",
           "default": "",
           "description": "Path to Keil fromelf.exe used to convert EIDE AXF to ELF"
         },
-        "stm32DebugHelper.openocdHost": {
+        "stm32LiveWatch.openocdHost": {
           "type": "string",
           "default": "127.0.0.1",
           "description": "OpenOCD TCL RPC host"
         },
-        "stm32DebugHelper.openocdPort": {
+        "stm32LiveWatch.openocdPort": {
           "type": "number",
           "default": 50001,
           "description": "OpenOCD TCL RPC port"
         },
-        "stm32DebugHelper.refreshInterval": {
+        "stm32LiveWatch.refreshInterval": {
           "type": "number",
           "default": 250,
           "minimum": 100,

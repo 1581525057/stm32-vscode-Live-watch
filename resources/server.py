@@ -254,6 +254,7 @@ class ElfExpert:
     def __init__(self, path: str):
         self.root_vars: dict[str, VariableNode] = {}
         self.type_die_map: dict[tuple[int, int], Any] = {}
+        self.type_definition_map: dict[tuple[Any, ...], Any] = {}
         with open(path, "rb") as file:
             elffile = ELFFile(file)
             dwarf = elffile.get_dwarf_info()
@@ -261,6 +262,7 @@ class ElfExpert:
                 for die in cu.iter_DIEs():
                     if die.tag:
                         self.type_die_map[(cu.cu_offset, die.offset)] = die
+                        self._register_type_definition(cu.cu_offset, die)
             symtab = elffile.get_section_by_name(".symtab")
             addr_map = {}
             if symtab:
@@ -269,15 +271,15 @@ class ElfExpert:
                 for die in cu.iter_DIEs():
                     if die.tag != "DW_TAG_variable":
                         continue
-                    name_attr = die.attributes.get("DW_AT_name")
-                    type_attr = die.attributes.get("DW_AT_type")
+                    name_attr = self._get_attr(die, "DW_AT_name", cu.cu_offset)
+                    type_attr, _, type_cu_off = self._get_attr_context(die, "DW_AT_type", cu.cu_offset)
                     if not (name_attr and type_attr):
                         continue
-                    name = name_attr.value.decode("utf-8")
+                    name = self._decode_attr_value(name_attr)
                     addr = self._resolve_variable_address(die, cu, addr_map)
                     if addr is None:
                         continue
-                    node = self._expand_node(name, addr, type_attr.value + cu.cu_offset, cu.cu_offset, 0)
+                    node = self._expand_node(name, addr, self._resolve_type_offset(type_attr, type_cu_off), type_cu_off, 0)
                     if node:
                         self.root_vars[name] = node
 
@@ -285,9 +287,94 @@ class ElfExpert:
         attr = die.attributes.get(attr_name)
         if not attr:
             return None
+        return self._decode_attr_value(attr)
+
+    def _decode_attr_value(self, attr: Any) -> str:
         if isinstance(attr.value, bytes):
             return attr.value.decode("utf-8", errors="ignore")
         return str(attr.value)
+
+    def _die_cu_offset(self, die: Any, fallback_cu_off: int) -> int:
+        die_cu = getattr(die, "cu", None)
+        return getattr(die_cu, "cu_offset", fallback_cu_off)
+
+    def _resolve_reference_die(self, attr: Any, cu_off: int) -> Any:
+        type_off = self._resolve_type_offset(attr, cu_off)
+        return self._lookup_type_die(cu_off, type_off)
+
+    def _get_attr_context(self, die: Any, attr_name: str, cu_off: int, visited: set[int] | None = None) -> tuple[Any | None, Any, int]:
+        attr = die.attributes.get(attr_name)
+        if attr:
+            return attr, die, cu_off
+
+        if visited is None:
+            visited = set()
+        die_id = id(die)
+        if die_id in visited:
+            return None, die, cu_off
+        visited.add(die_id)
+
+        # C++ 调试信息常把成员或变量的 name/type 放在 specification/origin 指向的声明 DIE 上。
+        for ref_attr_name in ("DW_AT_specification", "DW_AT_abstract_origin"):
+            ref_attr = die.attributes.get(ref_attr_name)
+            if not ref_attr:
+                continue
+            ref_die = self._resolve_reference_die(ref_attr, cu_off)
+            if not ref_die:
+                continue
+            ref_cu_off = self._die_cu_offset(ref_die, cu_off)
+            inherited_attr, inherited_die, inherited_cu_off = self._get_attr_context(ref_die, attr_name, ref_cu_off, visited)
+            if inherited_attr:
+                return inherited_attr, inherited_die, inherited_cu_off
+
+        return None, die, cu_off
+
+    def _get_attr(self, die: Any, attr_name: str, cu_off: int) -> Any:
+        return self._get_attr_context(die, attr_name, cu_off)[0]
+
+    def _is_declaration_die(self, die: Any) -> bool:
+        declaration_attr = die.attributes.get("DW_AT_declaration")
+        return bool(declaration_attr and declaration_attr.value)
+
+    def _register_type_definition(self, cu_off: int, die: Any) -> None:
+        if die.tag not in ("DW_TAG_structure_type", "DW_TAG_class_type"):
+            return
+        if self._is_declaration_die(die):
+            return
+        type_name = self._decode_attr_string(die, "DW_AT_name")
+        if not type_name:
+            return
+        self.type_definition_map[(cu_off, die.tag, type_name)] = die
+        self.type_definition_map[(die.tag, type_name)] = die
+
+    def _find_full_type_definition(self, die: Any, cu_off: int) -> Any:
+        if die.tag not in ("DW_TAG_structure_type", "DW_TAG_class_type"):
+            return die
+        if not self._is_declaration_die(die):
+            return die
+        type_name = self._decode_attr_string(die, "DW_AT_name")
+        if not type_name:
+            return die
+        type_definition_map = getattr(self, "type_definition_map", {})
+        return (
+            type_definition_map.get((cu_off, die.tag, type_name))
+            or type_definition_map.get((die.tag, type_name))
+            or die
+        )
+
+    def _resolve_type_offset(self, type_attr: Any, cu_off: int) -> int:
+        if getattr(type_attr, "form", "") == "DW_FORM_ref_addr":
+            return type_attr.value
+        return type_attr.value + cu_off
+
+    def _lookup_type_die(self, cu_off: int, type_off: int) -> Any:
+        die = self.type_die_map.get((cu_off, type_off))
+        if die:
+            return die
+        for candidate_cu_off, candidate_type_off in self.type_die_map:
+            if candidate_type_off == type_off:
+                return self.type_die_map[(candidate_cu_off, candidate_type_off)]
+        return None
 
     def _parse_location_address(self, expr: Any, cu: Any) -> int | None:
         if expr is None:
@@ -313,12 +400,30 @@ class ElfExpert:
             if addr is not None:
                 return addr
 
+        cu_off = getattr(cu, "cu_offset", 0)
         for attr_name in ("DW_AT_linkage_name", "DW_AT_MIPS_linkage_name", "DW_AT_name"):
-            name = self._decode_attr_string(die, attr_name)
-            if name and name in addr_map:
-                return addr_map[name]
+            name_attr = self._get_attr(die, attr_name, cu_off)
+            name = self._decode_attr_value(name_attr) if name_attr else None
+            addr = self._find_symbol_address(name, addr_map)
+            if addr is not None:
+                return addr
 
         return None
+
+    def _find_symbol_address(self, name: str | None, addr_map: dict[str, int]) -> int | None:
+        if not name:
+            return None
+        if name in addr_map:
+            return addr_map[name]
+
+        candidates = []
+        for symbol_name, addr in addr_map.items():
+            if symbol_name.endswith(name) or name in symbol_name:
+                candidates.append((len(symbol_name), addr))
+        if not candidates:
+            return None
+        candidates.sort(key=lambda item: item[0])
+        return candidates[0][1]
 
     def _parse_member_offset(self, attr: Any, cu: Any) -> int | None:
         value = attr.value
@@ -367,7 +472,7 @@ class ElfExpert:
         if depth > 15:
             return None
             
-        die = self.type_die_map.get((cu_off, type_off))
+        die = self._lookup_type_die(cu_off, type_off)
         if not die:
             return None
 
@@ -382,7 +487,7 @@ class ElfExpert:
         if die.tag in ("DW_TAG_volatile_type", "DW_TAG_const_type", "DW_TAG_typedef"):
             next_type = die.attributes.get("DW_AT_type")
             if not next_type: return None
-            node = self._expand_node(name, addr, next_type.value + cu_off, cu_off, depth + 1)
+            node = self._expand_node(name, addr, self._resolve_type_offset(next_type, cu_off), cu_off, depth + 1)
             if node and not node.type_name: 
                 node.type_name = type_name
             return node
@@ -431,7 +536,8 @@ class ElfExpert:
             if not dimensions: return None
             
             # 获取元素节点以获取其 size
-            element_node = self._expand_node(f"{name}[0]", addr, element_type_attr.value + cu_off, cu_off, depth + 1)
+            element_type_off = self._resolve_type_offset(element_type_attr, cu_off)
+            element_node = self._expand_node(f"{name}[0]", addr, element_type_off, cu_off, depth + 1)
             if not element_node: return None
 
             # 判定：如果是 char 类型的 1 维数组，标记为 string
@@ -452,29 +558,47 @@ class ElfExpert:
             
             # 🔥 修复 2：斩断子节点！如果被判定为 string，绝不允许它往下生成 [0], [1]...
             if math.prod(dimensions) <= 256 and v_type != "string":
-                self._fill_array_children(array_node, addr, dimensions, element_type_attr.value + cu_off, cu_off, depth, element_node.size)
+                self._fill_array_children(array_node, addr, dimensions, element_type_off, cu_off, depth, element_node.size)
                 
             return array_node
 
             
         # --- 5. 处理结构体和 C++ 类 ---
         if die.tag in ("DW_TAG_structure_type", "DW_TAG_class_type"):
+            die = self._find_full_type_definition(die, cu_off)
+            name_attr = die.attributes.get("DW_AT_name")
+            type_name = name_attr.value.decode("utf-8") if name_attr else type_name
+            byte_size = die.attributes.get("DW_AT_byte_size")
+            current_size = byte_size.value if byte_size else current_size
+
             # 关键修复：current_size 必须从 DWARF 读取，不能固定为 0
             struct_node = VariableNode(name, addr, "struct", current_size, type_name or "struct")
             for child in die.iter_children():
                 if child.tag == "DW_TAG_member":
-                    m_name = child.attributes.get("DW_AT_name")
-                    m_loc = child.attributes.get("DW_AT_data_member_location")
-                    m_type = child.attributes.get("DW_AT_type")
-                    if m_name and m_loc and m_type:
+                    m_name = self._get_attr(child, "DW_AT_name", cu_off)
+                    m_loc, m_loc_die, _ = self._get_attr_context(child, "DW_AT_data_member_location", cu_off)
+                    m_type, _, m_type_cu_off = self._get_attr_context(child, "DW_AT_type", cu_off)
+                    if not (m_name and m_type):
+                        continue
+
+                    declaration_attr = child.attributes.get("DW_AT_declaration")
+                    external_attr = child.attributes.get("DW_AT_external")
+                    if (declaration_attr and bool(declaration_attr.value)) or (external_attr and not m_loc):
+                        continue
+
+                    if m_loc:
                         # 解析成员偏移量，兼容 C++ 类成员的表达式形式
-                        offset = self._parse_member_offset(m_loc, die.cu)
+                        offset = self._parse_member_offset(m_loc, getattr(m_loc_die, "cu", die.cu))
                         if offset is None:
                             continue
-                        member_name = m_name.value.decode("utf-8")
-                        child_node = self._expand_node(member_name, addr + offset, m_type.value + cu_off, cu_off, depth + 1)
-                        if child_node:
-                            struct_node.children[member_name] = child_node
+                    else:
+                        # C++ 类第一个非静态成员可能省略位置属性，等价于偏移 0
+                        offset = 0
+
+                    member_name = self._decode_attr_value(m_name)
+                    child_node = self._expand_node(member_name, addr + offset, self._resolve_type_offset(m_type, m_type_cu_off), m_type_cu_off, depth + 1)
+                    if child_node:
+                        struct_node.children[member_name] = child_node
             return struct_node
 
         return None
