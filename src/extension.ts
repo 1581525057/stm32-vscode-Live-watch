@@ -5,10 +5,13 @@ import { affectsLiveWatchConfig, getConfigValue, getLiveWatchConfig } from './co
 import { generateElfFromEideAxf, resolveElfPathWithAxf, ResolveElfResult } from './elfResolver';
 import { ServerClient } from './serverClient';
 import { OperationsTreeDataProvider, VariableTreeDataProvider, VariableTreeItem } from './variableTreeDataProvider';
+import { ChartManager } from './chartManager';
+import { ChartViewProvider } from './chartPanel';
 
 let serverClient: ServerClient;
 let variableTreeDataProvider: VariableTreeDataProvider;
 let autoStartInProgress: Promise<void> | undefined;
+let chartManager: ChartManager;
 
 export function activate(context: vscode.ExtensionContext) {
     console.log('STM32 Live Watch is now active!');
@@ -17,6 +20,10 @@ export function activate(context: vscode.ExtensionContext) {
     serverClient = new ServerClient(serverScriptPath);
     variableTreeDataProvider = new VariableTreeDataProvider(serverClient, context.workspaceState);
     const operationsTreeDataProvider = new OperationsTreeDataProvider();
+    const chartManagerInstance = new ChartManager(serverClient, context.workspaceState);
+    chartManager = chartManagerInstance;
+    const chartViewProvider = new ChartViewProvider(context.extensionUri, (msg) => chartManagerInstance.handleWebviewMessage(msg));
+    chartManagerInstance.attachWebview(chartViewProvider);
     let panelTreeView: vscode.TreeView<vscode.TreeItem> | undefined;
     let lastSelectedVariableItem: VariableTreeItem | undefined;
 
@@ -136,6 +143,20 @@ export function activate(context: vscode.ExtensionContext) {
         void vscode.commands.executeCommand('stm32-debug-variables-panel.focus');
     });
 
+    const addToChartCommand = vscode.commands.registerCommand('stm32-live-watch.addToChart', async (item?: VariableTreeItem) => {
+        const targetItem = getSelectedVariableItem(item, panelTreeView, lastSelectedVariableItem);
+        if (!targetItem) {
+            // 无选中项，打开输入框
+            await chartManagerInstance.addVariable('');
+            return;
+        }
+        await chartManagerInstance.addVariable(targetItem.variableInfo.path);
+    });
+
+    const showChartPanelCommand = vscode.commands.registerCommand('stm32-live-watch.showChartPanel', () => {
+        void vscode.commands.executeCommand('stm32-debug-chart-panel.focus');
+    });
+
     panelTreeView = vscode.window.createTreeView('stm32-debug-variables-panel', {
         treeDataProvider: variableTreeDataProvider,
         showCollapseAll: true
@@ -144,6 +165,10 @@ export function activate(context: vscode.ExtensionContext) {
         treeDataProvider: operationsTreeDataProvider,
         showCollapseAll: false
     });
+    const chartViewDisposable = vscode.window.registerWebviewViewProvider(
+        ChartViewProvider.viewType,
+        chartViewProvider
+    );
 
     const selectionDisposable = panelTreeView.onDidChangeSelection((event) => {
         const selectedItem = event.selection[0];
@@ -156,13 +181,21 @@ export function activate(context: vscode.ExtensionContext) {
         if (session.type !== 'cortex-debug') {
             return;
         }
-        void ensureServerRunning(false);
+        void ensureServerRunning(false).then(() => {
+            void chartManagerInstance.restoreVariables().then(() => {
+                chartManagerInstance.startCollecting();
+            });
+        });
     });
 
     const configChangeDisposable = vscode.workspace.onDidChangeConfiguration((event) => {
         if (affectsLiveWatchConfig(event, 'refreshInterval')) {
             const newInterval = getConfigValue<number>('refreshInterval', 250);
             variableTreeDataProvider.updateRefreshInterval(newInterval);
+        }
+        if (affectsLiveWatchConfig(event, 'chartRefreshInterval')) {
+            const newInterval = getConfigValue<number>('chartRefreshInterval', 100);
+            chartManagerInstance.updateInterval(newInterval);
         }
     });
 
@@ -178,8 +211,11 @@ export function activate(context: vscode.ExtensionContext) {
         renameVariableCommand,
         deleteVariableCommand,
         showBottomPanelCommand,
+        addToChartCommand,
+        showChartPanelCommand,
         panelTreeView,
         operationsTreeView,
+        chartViewDisposable,
         selectionDisposable,
         debugStartDisposable,
         configChangeDisposable
@@ -344,5 +380,8 @@ function showStartServerError(error: unknown): void {
 export function deactivate() {
     if (serverClient) {
         serverClient.stop();
+    }
+    if (chartManager) {
+        chartManager.dispose();
     }
 }
