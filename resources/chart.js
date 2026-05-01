@@ -106,6 +106,7 @@
     var btnPause = document.getElementById('btnPause');
     var btnClear = document.getElementById('btnClear');
     var btnAutoY = document.getElementById('btnAutoY');
+    var btnExport = document.getElementById('btnExport');
     var selWindow = document.getElementById('selWindow');
     var selInterval = document.getElementById('selInterval');
 
@@ -147,6 +148,65 @@
 
     selInterval.addEventListener('change', function () {
         vscode.postMessage({ type: 'setInterval', value: parseInt(this.value, 10) });
+    });
+
+    // CSV 导出：收集所有数据点，按时间戳对齐，生成 CSV 文件下载
+    btnExport.addEventListener('click', function () {
+        if (chart.data.datasets.length === 0) {
+            return;
+        }
+
+        // 收集所有时间戳并排序
+        var allTimestamps = new Set();
+        chart.data.datasets.forEach(function (ds) {
+            ds.data.forEach(function (pt) {
+                allTimestamps.add(pt.x);
+            });
+        });
+        var timestamps = Array.from(allTimestamps).sort(function (a, b) { return a - b; });
+
+        // 构建 CSV 头
+        var header = 'timestamp_s';
+        chart.data.datasets.forEach(function (ds) {
+            header += ',' + ds.label;
+        });
+
+        // 构建数据行
+        var rows = [header];
+        timestamps.forEach(function (ts) {
+            var row = (ts / 1000).toFixed(3);
+            chart.data.datasets.forEach(function (ds) {
+                var found = null;
+                for (var i = 0; i < ds.data.length; i++) {
+                    if (ds.data[i].x === ts) {
+                        found = ds.data[i].y;
+                        break;
+                    }
+                }
+                row += ',' + (found !== null ? found.toFixed(3) : '');
+            });
+            rows.push(row);
+        });
+
+        // 生成文件名
+        var now = new Date();
+        var filename = 'chart_data_' +
+            now.getFullYear() +
+            String(now.getMonth() + 1).padStart(2, '0') +
+            String(now.getDate()).padStart(2, '0') + '_' +
+            String(now.getHours()).padStart(2, '0') +
+            String(now.getMinutes()).padStart(2, '0') +
+            String(now.getSeconds()).padStart(2, '0') +
+            '.csv';
+
+        // 触发下载
+        var csvContent = rows.join('\n');
+        var blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        var link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = filename;
+        link.click();
+        URL.revokeObjectURL(link.href);
     });
 
     // 更新 X 轴范围：始终显示 [elapsed - windowMs, elapsed + padding]
