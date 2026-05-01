@@ -517,4 +517,4 @@ stm32-vscode-Live-watch/
 
 ## 致谢
 
-本项目参考了 [stm32-debug-helper](https://github.com/ZEALHT001/stm32-debug-helper)，感谢作者提供的思路。
+本项目参考了 [stm32-debug-helper](https://github.com/ZEALHT001/stm32-debug-helper)，感谢作者提供的源码思路。
