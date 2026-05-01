@@ -1,7 +1,7 @@
 # STM32 Live Watch
 
 发布者：yezi  
-版本：3.0.0  
+版本：3.1.0  
 适用场景：VS Code + EIDE + Cortex-Debug + OpenOCD 的 STM32 实时变量观察与图表可视化
 
 `stm32-vscode-Live-watch` 是一个面向 STM32 调试阶段的 VS Code 扩展。它不会替代调试器，而是在现有 EIDE、Cortex-Debug、OpenOCD 工作流旁边增加一个更直接的实时变量观察界面：你编译工程、启动调试、添加变量，扩展负责从 ELF 调试信息里解析变量地址，并通过 OpenOCD 读取目标板内存。
@@ -29,6 +29,13 @@
 - 相对时间轴平滑滑动，X 轴右侧留白，Y 轴自动缩放。
 - 支持暂停/继续、清除历史、时间窗口切换（5s / 10s / 30s / 60s）。
 - 鼠标悬停显示精确值，滚轮缩放时间轴。
+
+3.1.0 图表系统升级：
+
+- 图表自动适配 VS Code 亮色/暗色主题，无需手动切换。
+- 图例区域实时显示每个变量的最大值、最小值和均值统计。
+- 双击图例变量名可固定 Y 轴范围，Auto Y 按钮一键恢复自动缩放。
+- 新增 Export 按钮，一键导出图表数据为 CSV 文件，支持 Excel 打开。
 
 ## 它解决什么问题
 
@@ -514,7 +521,7 @@ stm32-vscode-Live-watch/
 
 - 扩展名：`stm32-vscode-Live-watch`
 - 发布者：`yezi`
-- 版本：`3.0.0`
+- 版本：`3.1.0`
 - 仓库：<https://github.com/1581525057/stm32-vscode-Live-watch>
 
 ## 致谢
