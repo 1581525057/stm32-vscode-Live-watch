@@ -187,6 +187,26 @@
         chart.options.scales.y.max = allMax + padding;
     }
 
+    // 计算数据集的统计信息（基于当前可见数据）
+    function computeStats(ds) {
+        if (!ds.data || ds.data.length === 0) {
+            return null;
+        }
+        var min = Infinity, max = -Infinity, sum = 0;
+        for (var i = 0; i < ds.data.length; i++) {
+            var y = ds.data[i].y;
+            if (y < min) min = y;
+            if (y > max) max = y;
+            sum += y;
+        }
+        return {
+            min: min,
+            max: max,
+            avg: sum / ds.data.length,
+            cur: ds.data[ds.data.length - 1].y
+        };
+    }
+
     // 渲染图例
     function renderLegend() {
         legendEl.innerHTML = '';
@@ -207,6 +227,16 @@
             var lastPoint = ds.data.length > 0 ? ds.data[ds.data.length - 1] : null;
             value.textContent = lastPoint ? lastPoint.y.toFixed(3) : '?';
 
+            var stats = computeStats(ds);
+            var statsEl = document.createElement('span');
+            statsEl.className = 'legend-stats';
+            if (stats) {
+                statsEl.innerHTML =
+                    '<span>max:' + stats.max.toFixed(3) + '</span>' +
+                    '<span>min:' + stats.min.toFixed(3) + '</span>' +
+                    '<span>avg:' + stats.avg.toFixed(3) + '</span>';
+            }
+
             var remove = document.createElement('span');
             remove.className = 'legend-remove';
             remove.textContent = '✕';
@@ -218,6 +248,7 @@
             item.appendChild(color);
             item.appendChild(name);
             item.appendChild(value);
+            item.appendChild(statsEl);
             item.appendChild(remove);
             legendEl.appendChild(item);
         });
