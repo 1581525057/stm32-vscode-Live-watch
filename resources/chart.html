@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline';">
+    <title>STM32 Variable Chart</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: var(--vscode-font-family, 'Segoe UI', sans-serif);
+            font-size: var(--vscode-font-size, 13px);
+            color: var(--vscode-foreground, #cccccc);
+            background: var(--vscode-editor-background, #1e1e1e);
+            overflow: hidden;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .toolbar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            background: var(--vscode-sideBar-background, #252526);
+            border-bottom: 1px solid var(--vscode-panel-border, #3c3c3c);
+            flex-shrink: 0;
+        }
+
+        .toolbar button {
+            background: var(--vscode-button-secondaryBackground, #3c3c3c);
+            color: var(--vscode-button-secondaryForeground, #cccccc);
+            border: none;
+            border-radius: 4px;
+            padding: 4px 10px;
+            font-size: 12px;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        .toolbar button:hover {
+            background: var(--vscode-button-secondaryHoverBackground, #45494e);
+        }
+
+        .toolbar button.primary {
+            background: var(--vscode-button-background, #0e639c);
+            color: var(--vscode-button-foreground, #ffffff);
+        }
+
+        .toolbar button.primary:hover {
+            background: var(--vscode-button-hoverBackground, #1177bb);
+        }
+
+        .toolbar select {
+            background: var(--vscode-dropdown-background, #3c3c3c);
+            color: var(--vscode-dropdown-foreground, #cccccc);
+            border: 1px solid var(--vscode-dropdown-border, #3c3c3c);
+            border-radius: 3px;
+            padding: 2px 6px;
+            font-size: 11px;
+        }
+
+        .toolbar .spacer { flex: 1; }
+
+        .toolbar label {
+            color: var(--vscode-descriptionForeground, #999);
+            font-size: 11px;
+        }
+
+        .legend {
+            display: flex;
+            gap: 12px;
+            padding: 4px 12px;
+            background: var(--vscode-sideBar-background, #252526);
+            border-bottom: 1px solid var(--vscode-panel-border, #3c3c3c);
+            flex-shrink: 0;
+            flex-wrap: wrap;
+            min-height: 28px;
+            align-items: center;
+        }
+
+        .legend:empty::before {
+            content: 'No variables plotted — click + Add or right-click a variable in the watch panel';
+            color: var(--vscode-descriptionForeground, #999);
+            font-size: 11px;
+            font-style: italic;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 11px;
+            cursor: default;
+        }
+
+        .legend-color {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+            flex-shrink: 0;
+        }
+
+        .legend-name { font-weight: 500; }
+
+        .legend-value {
+            color: var(--vscode-descriptionForeground, #999);
+            font-size: 10px;
+        }
+
+        .legend-remove {
+            color: var(--vscode-descriptionForeground, #999);
+            cursor: pointer;
+            font-size: 10px;
+            margin-left: 2px;
+        }
+
+        .legend-remove:hover {
+            color: var(--vscode-errorForeground, #f44747);
+        }
+
+        .chart-container {
+            flex: 1;
+            position: relative;
+            padding: 4px;
+            min-height: 0;
+        }
+
+        .chart-container canvas {
+            width: 100% !important;
+            height: 100% !important;
+        }
+    </style>
+</head>
+<body>
+    <div class="toolbar">
+        <button class="primary" id="btnAdd" title="Add variable to chart">+ Add</button>
+        <button id="btnPause" title="Pause / Resume">⏸ Pause</button>
+        <button id="btnClear" title="Clear all data">🗑 Clear</button>
+        <div class="spacer"></div>
+        <label>Window:</label>
+        <select id="selWindow">
+            <option value="5">5s</option>
+            <option value="10" selected>10s</option>
+            <option value="30">30s</option>
+            <option value="60">60s</option>
+        </select>
+        <label>Interval:</label>
+        <select id="selInterval">
+            <option value="50">50ms</option>
+            <option value="100" selected>100ms</option>
+            <option value="250">250ms</option>
+        </select>
+    </div>
+    <div class="legend" id="legend"></div>
+    <div class="chart-container">
+        <canvas id="chartCanvas"></canvas>
+    </div>
+    <script nonce="${nonce}" src="${chartJsUri}"></script>
+    <script nonce="${nonce}" src="${chartScriptUri}"></script>
+</body>
+</html>
