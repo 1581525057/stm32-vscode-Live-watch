@@ -25,6 +25,9 @@
 
     // 状态
     let paused = false;
+    let yFixed = false;     // Y 轴是否固定范围
+    let yFixedMin = 0;
+    let yFixedMax = 100;
     let timeWindow = 10; // 秒
     let colorIndex = 0;
     const datasets = new Map(); // path -> { index, color }
@@ -102,6 +105,7 @@
     var btnAdd = document.getElementById('btnAdd');
     var btnPause = document.getElementById('btnPause');
     var btnClear = document.getElementById('btnClear');
+    var btnAutoY = document.getElementById('btnAutoY');
     var selWindow = document.getElementById('selWindow');
     var selInterval = document.getElementById('selInterval');
 
@@ -124,6 +128,13 @@
         updateYAxisRange();
         chart.update('none');
         vscode.postMessage({ type: 'clear' });
+    });
+
+    btnAutoY.addEventListener('click', function () {
+        yFixed = false;
+        btnAutoY.style.fontWeight = 'normal';
+        updateYAxisRange();
+        chart.update('none');
     });
 
     selWindow.addEventListener('change', function () {
@@ -161,8 +172,14 @@
         });
     }
 
-    // Y 轴自动缩放：基于可见数据范围，上下各留 10% padding
+    // Y 轴自动缩放：基于可见数据范围，上下各留 10% padding；支持固定范围模式
     function updateYAxisRange() {
+        if (yFixed) {
+            chart.options.scales.y.min = yFixedMin;
+            chart.options.scales.y.max = yFixedMax;
+            return;
+        }
+
         var allMin = Infinity, allMax = -Infinity;
         chart.data.datasets.forEach(function (ds) {
             ds.data.forEach(function (pt) {
@@ -221,6 +238,21 @@
             var name = document.createElement('span');
             name.className = 'legend-name';
             name.textContent = ds.label;
+            name.title = 'Double-click to fix Y-axis range';
+            name.style.cursor = 'pointer';
+            name.addEventListener('dblclick', function () {
+                var stats = computeStats(ds);
+                if (!stats) return;
+                var range = stats.max - stats.min;
+                if (range < 1) range = 1;
+                var padding = range * 0.1;
+                yFixedMin = stats.min - padding;
+                yFixedMax = stats.max + padding;
+                yFixed = true;
+                btnAutoY.style.fontWeight = 'bold';
+                updateYAxisRange();
+                chart.update('none');
+            });
 
             var value = document.createElement('span');
             value.className = 'legend-value';
