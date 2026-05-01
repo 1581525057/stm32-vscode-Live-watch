@@ -247,7 +247,7 @@
         chart.options.scales.y.max = allMax + padding;
     }
 
-    // 渲染图例
+    // 完整重建图例 DOM（仅在添加/删除变量时调用）
     function renderLegend() {
         legendEl.innerHTML = '';
         chart.data.datasets.forEach(function (ds) {
@@ -264,6 +264,7 @@
 
             var value = document.createElement('span');
             value.className = 'legend-value';
+            value.setAttribute('data-label', ds.label);
             var lastPoint = ds.data.length > 0 ? ds.data[ds.data.length - 1] : null;
             value.textContent = lastPoint ? lastPoint.y.toFixed(3) : '?';
 
@@ -281,6 +282,25 @@
             item.appendChild(remove);
             legendEl.appendChild(item);
         });
+    }
+
+    // 只更新图例的值文本，不重建 DOM（高频调用时使用）
+    function updateLegendValues() {
+        var valueEls = legendEl.querySelectorAll('.legend-value');
+        for (var i = 0; i < valueEls.length; i++) {
+            var el = valueEls[i];
+            var label = el.getAttribute('data-label');
+            var ds = null;
+            for (var j = 0; j < chart.data.datasets.length; j++) {
+                if (chart.data.datasets[j].label === label) {
+                    ds = chart.data.datasets[j];
+                    break;
+                }
+            }
+            if (ds && ds.data.length > 0) {
+                el.textContent = ds.data[ds.data.length - 1].y.toFixed(3);
+            }
+        }
     }
 
     // 添加变量
@@ -355,7 +375,7 @@
         // Y 轴自动居中
         updateYAxisRange();
         chart.update('none');
-        renderLegend();
+        updateLegendValues();
     }
 
     // 设置时间窗口
