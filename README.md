@@ -1,17 +1,26 @@
 # STM32 Live Watch
 
 发布者：yezi  
-版本：2.1.0  
-适用场景：VS Code + EIDE + Cortex-Debug + OpenOCD 的 STM32 实时变量观察
+版本：3.0.0  
+适用场景：VS Code + EIDE + Cortex-Debug + OpenOCD 的 STM32 实时变量观察与图表可视化
 
 `stm32-vscode-Live-watch` 是一个面向 STM32 调试阶段的 VS Code 扩展。它不会替代调试器，而是在现有 EIDE、Cortex-Debug、OpenOCD 工作流旁边增加一个更直接的实时变量观察界面：你编译工程、启动调试、添加变量，扩展负责从 ELF 调试信息里解析变量地址，并通过 OpenOCD 读取目标板内存。
 
 2.1.0 重点优化了变量显示可读性和文档表述：
 
 - 变量名和值放到 TreeView 主文本区域，不再都挤在灰色说明文字里。
-- 文档中统一使用“可直接读写的普通变量”这类用户容易理解的说法。
+- 文档中统一使用”可直接读写的普通变量”这类用户容易理解的说法。
 - 沿用双面板界面结构：`1. stm32livewatch实时变量查看` 和 `2. 操作` 是左侧栏里的两个同级面板。
 - 继续支持 C++ class/struct 展开，例如 `PID pid_yaw;` 可以展开到 public 成员。
+
+3.0.0 新增变量图表查看模块：
+
+- 底部面板实时折线图，支持多个变量同时绘制。
+- 从监视面板右键或图表面板内手动添加变量到图表。
+- 独立刷新通道，可配置 50ms / 100ms / 250ms 采集间隔。
+- 相对时间轴平滑滑动，X 轴右侧留白，Y 轴自动缩放。
+- 支持暂停/继续、清除历史、时间窗口切换（5s / 10s / 30s / 60s）。
+- 鼠标悬停显示精确值，滚轮缩放时间轴。
 
 ## 它解决什么问题
 
@@ -119,7 +128,7 @@ PID pid_yaw;
 
 ## 界面说明
 
-安装后，左侧活动栏会出现 `STM32 Live Watch` 图标。进入后有两个同级面板。
+安装后，左侧活动栏会出现 `STM32 Live Watch` 图标。进入后有两个同级面板，底部面板区域新增一个变量图表面板。
 
 ### 1. stm32livewatch实时变量查看
 
@@ -161,6 +170,34 @@ PID pid_yaw;
 
 `2. 操作` 是独立面板，不是变量树的子节点。变量树内容很多时，`1. stm32livewatch实时变量查看` 自己滚动，`2. 操作` 仍保持在左侧栏下面，方便随时展开使用。
 
+### 3. Variable Chart（变量图表）
+
+底部面板区域的实时折线图，用于观察变量随时间的变化趋势，适合 PID 调参、信号分析等场景。
+
+工具栏按钮：
+
+| 按钮 | 用途 |
+| --- | --- |
+| `+ Add` | 弹出输入框，手动输入变量名添加到图表 |
+| `⏸ Pause` | 暂停数据采集，图表冻结，可回看历史 |
+| `▶ Resume` | 恢复数据采集 |
+| `🗑 Clear` | 清除所有历史数据，重新开始 |
+| `Window` 下拉框 | 调整时间窗口：5s / 10s / 30s / 60s |
+| `Interval` 下拉框 | 调整图表采集频率：50ms / 100ms / 250ms |
+
+图例区域：
+
+- 显示每个变量的颜色、名称和当前值。
+- 点击 `✕` 可从图表中移除该变量。
+
+图表交互：
+
+| 操作 | 行为 |
+| --- | --- |
+| 鼠标悬停 | 显示精确值 tooltip |
+| 鼠标滚轮 | 缩放时间轴 |
+| 右键监视面板变量 | 选择 "Add to Chart" 添加到图表 |
+
 ## 使用流程
 
 ### 推荐流程
@@ -190,6 +227,16 @@ STM32 Live Watch: Add Selected Variable
 ```
 
 扩展会直接把选中的变量名加入监视列表。如果服务还没启动，会先尝试启动服务。
+
+### 使用变量图表
+
+1. 在监视面板中添加变量并确认有值。
+2. 在底部面板区域切换到 `Variable Chart` 标签页。
+3. 右键监视面板中的变量，选择 `Add to Chart`，或点击图表面板的 `+ Add` 手动输入变量名。
+4. 图表开始实时绘制折线，鼠标悬停可查看精确值。
+5. 使用 `Window` 下拉框调整时间范围，使用滚轮缩放时间轴。
+6. 点击 `⏸ Pause` 可冻结图表回看历史数据。
+7. 图例中的 `✕` 可移除不需要的变量。
 
 ### 添加 C++ class 变量
 
@@ -314,6 +361,8 @@ fromelf.exe --elf --output build/app.elf build/app.axf
 | `stm32LiveWatch.openocdPort` | `50001` | OpenOCD TCL RPC 端口 |
 | `stm32LiveWatch.refreshInterval` | `250` | 变量刷新间隔，单位毫秒 |
 | `stm32LiveWatch.pythonPath` | `python3` | 未使用可执行后端时的 Python 路径 |
+| `stm32LiveWatch.chartRefreshInterval` | `100` | 图表数据采集间隔，单位毫秒，最小 50 |
+| `stm32LiveWatch.chartTimeWindow` | `10` | 图表时间窗口，单位秒 |
 
 ## 命令列表
 
@@ -330,6 +379,8 @@ fromelf.exe --elf --output build/app.elf build/app.axf
 | `STM32 Live Watch: Rename Variable Expression` | 重命名根变量表达式 |
 | `STM32 Live Watch: Delete Variable` | 删除根变量 |
 | `STM32 Live Watch: Show Variables` | 聚焦变量面板 |
+| `STM32 Live Watch: Add to Chart` | 添加变量到图表（也可右键监视面板变量） |
+| `STM32 Live Watch: Show Chart Panel` | 聚焦图表面板 |
 
 ## 构建和测试
 
@@ -434,12 +485,17 @@ stm32-vscode-Live-watch/
 │  ├─ elfResolver.ts               # EIDE AXF 查找、fromelf 定位和 ELF 生成
 │  ├─ serverClient.ts              # VS Code 扩展与后端服务通信
 │  ├─ variableTreeDataProvider.ts  # 变量视图和操作视图
+│  ├─ chartPanel.ts                # 图表面板 WebviewView Provider
+│  ├─ chartManager.ts              # 图表数据采集和变量管理
 │  ├─ config.ts                    # 配置读取和兼容旧配置
 │  └─ models/
 ├─ resources/
 │  ├─ icon.jpg
 │  ├─ icon.svg
-│  └─ server.py                    # 后端变量读取服务
+│  ├─ server.py                    # 后端变量读取服务
+│  ├─ chart.html                   # 图表面板 Webview HTML 模板
+│  ├─ chart.js                     # 图表面板 Chart.js 渲染脚本
+│  └─ chart.min.js                 # Chart.js 库文件
 ├─ bin/                            # 后端可执行文件
 ├─ tests/                          # Python 后端测试
 ├─ package.json                    # 扩展清单、命令、视图、配置和脚本
@@ -450,7 +506,7 @@ stm32-vscode-Live-watch/
 
 - 扩展名：`stm32-vscode-Live-watch`
 - 发布者：`yezi`
-- 版本：`2.1.0`
+- 版本：`3.0.0`
 - 仓库：<https://github.com/1581525057/stm32-vscode-Live-watch>
 
 ## 致谢
