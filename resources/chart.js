@@ -1,5 +1,6 @@
 // resources/chart.js
 // Webview 侧的 Chart.js 渲染 + 消息处理
+// 方案 B：相对时间轴 + 平滑滑动窗口
 
 (function () {
     const vscode = acquireVsCodeApi();
@@ -14,7 +15,11 @@
     let paused = false;
     let timeWindow = 10; // 秒
     let colorIndex = 0;
-    const datasets = new Map(); // path -> { dataset index, label, color }
+    const datasets = new Map(); // path -> { index, color }
+
+    // 相对时间基准：首次收到数据时记录，后续所有时间相对于此
+    let startTime = 0;
+    let elapsed = 0; // 当前已流逝的毫秒数
 
     // Chart.js 实例
     const ctx = document.getElementById('chartCanvas').getContext('2d');
@@ -37,13 +42,18 @@
                         color: '#6c7086',
                         font: { size: 10 },
                         callback: function (value) {
-                            const diff = (value - Date.now()) / 1000;
+                            // value 是相对于 startTime 的毫秒数
+                            // 显示相对于 "现在" 的秒数
+                            var diff = (value - elapsed) / 1000;
+                            if (diff > -0.5) return 'now';
                             return diff.toFixed(0) + 's';
                         },
                         maxTicksLimit: 8,
                         stepSize: 1000
                     },
-                    grid: { color: '#313244' }
+                    grid: { color: '#313244' },
+                    min: 0,
+                    max: 10000 // 初始值，会被动态更新
                 },
                 y: {
                     ticks: { color: '#6c7086', font: { size: 10 } },
@@ -61,7 +71,8 @@
                     callbacks: {
                         title: function (items) {
                             if (!items.length) return '';
-                            const diff = (items[0].parsed.x - Date.now()) / 1000;
+                            var diff = (items[0].parsed.x - elapsed) / 1000;
+                            if (diff > -0.5) return 'now';
                             return diff.toFixed(1) + 's ago';
                         },
                         label: function (item) {
@@ -74,12 +85,12 @@
     });
 
     // DOM 元素
-    const legendEl = document.getElementById('legend');
-    const btnAdd = document.getElementById('btnAdd');
-    const btnPause = document.getElementById('btnPause');
-    const btnClear = document.getElementById('btnClear');
-    const selWindow = document.getElementById('selWindow');
-    const selInterval = document.getElementById('selInterval');
+    var legendEl = document.getElementById('legend');
+    var btnAdd = document.getElementById('btnAdd');
+    var btnPause = document.getElementById('btnPause');
+    var btnClear = document.getElementById('btnClear');
+    var selWindow = document.getElementById('selWindow');
+    var selInterval = document.getElementById('selInterval');
 
     // 工具栏事件
     btnAdd.addEventListener('click', function () {
@@ -94,12 +105,18 @@
 
     btnClear.addEventListener('click', function () {
         chart.data.datasets.forEach(function (ds) { ds.data = []; });
+        startTime = 0;
+        elapsed = 0;
+        updateAxisRange();
         chart.update('none');
         vscode.postMessage({ type: 'clear' });
     });
 
     selWindow.addEventListener('change', function () {
         timeWindow = parseInt(this.value, 10);
+        updateAxisRange();
+        trimOldData();
+        chart.update('none');
         vscode.postMessage({ type: 'setWindow', value: timeWindow });
     });
 
@@ -107,10 +124,32 @@
         vscode.postMessage({ type: 'setInterval', value: parseInt(this.value, 10) });
     });
 
+    // 更新 X 轴范围：始终显示 [elapsed - windowMs, elapsed]
+    function updateAxisRange() {
+        var windowMs = timeWindow * 1000;
+        var xMin = elapsed - windowMs;
+        var xMax = elapsed;
+        // 保证最小范围，避免图表为空时轴塌缩
+        if (xMin < 0) xMin = 0;
+        if (xMax < windowMs) xMax = windowMs;
+        chart.options.scales.x.min = xMin;
+        chart.options.scales.x.max = xMax;
+    }
+
+    // 裁剪超出窗口的旧数据
+    function trimOldData() {
+        var cutoff = elapsed - timeWindow * 1000;
+        chart.data.datasets.forEach(function (ds) {
+            while (ds.data.length > 0 && ds.data[0].x < cutoff) {
+                ds.data.shift();
+            }
+        });
+    }
+
     // 渲染图例
     function renderLegend() {
         legendEl.innerHTML = '';
-        chart.data.datasets.forEach(function (ds, i) {
+        chart.data.datasets.forEach(function (ds) {
             var item = document.createElement('span');
             item.className = 'legend-item';
 
@@ -176,7 +215,7 @@
 
         // 重建索引
         var idx = 0;
-        datasets.forEach(function (val, key) {
+        datasets.forEach(function (val) {
             val.index = idx++;
         });
 
@@ -185,24 +224,33 @@
         vscode.postMessage({ type: 'removeVariable', path: path });
     }
 
-    // 追加数据点
+    // 追加数据点（核心改动：使用相对时间）
     function appendData(points) {
-        var now = Date.now();
-        var cutoff = now - timeWindow * 1000;
+        // 首次收到数据时初始化时间基准
+        if (startTime === 0) {
+            startTime = Date.now();
+        }
+
+        // 更新已流逝时间
+        elapsed = Date.now() - startTime;
+        var windowMs = timeWindow * 1000;
 
         points.forEach(function (point) {
             var info = datasets.get(point.path);
             if (info === undefined) return;
 
             var ds = chart.data.datasets[info.index];
-            ds.data.push({ x: now, y: point.value });
+            ds.data.push({ x: elapsed, y: point.value });
 
             // 裁剪超出窗口的数据
+            var cutoff = elapsed - windowMs;
             while (ds.data.length > 0 && ds.data[0].x < cutoff) {
                 ds.data.shift();
             }
         });
 
+        // 更新 X 轴范围，平滑滑动
+        updateAxisRange();
         chart.update('none');
         renderLegend();
     }
@@ -210,12 +258,8 @@
     // 设置时间窗口
     function setTimeWindow(seconds) {
         timeWindow = seconds;
-        var cutoff = Date.now() - timeWindow * 1000;
-        chart.data.datasets.forEach(function (ds) {
-            while (ds.data.length > 0 && ds.data[0].x < cutoff) {
-                ds.data.shift();
-            }
-        });
+        updateAxisRange();
+        trimOldData();
         chart.update('none');
     }
 
@@ -239,6 +283,9 @@
                 break;
             case 'clear':
                 chart.data.datasets.forEach(function (ds) { ds.data = []; });
+                startTime = 0;
+                elapsed = 0;
+                updateAxisRange();
                 chart.update('none');
                 renderLegend();
                 break;
