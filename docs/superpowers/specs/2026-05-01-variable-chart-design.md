@@ -131,7 +131,7 @@ class ChartViewProvider implements vscode.WebviewViewProvider {
 }
 ```
 
-### 3. `src/webview/chart.js` — Webview 侧 Chart.js 渲染
+### 3. `resources/chart.js` — Webview 侧 Chart.js 渲染
 
 职责：
 - 初始化 Chart.js 折线图实例
