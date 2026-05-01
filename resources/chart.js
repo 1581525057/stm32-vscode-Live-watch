@@ -25,9 +25,6 @@
 
     // 状态
     let paused = false;
-    let yFixed = false;     // Y 轴是否固定范围
-    let yFixedMin = 0;
-    let yFixedMax = 100;
     let timeWindow = 10; // 秒
     let colorIndex = 0;
     const datasets = new Map(); // path -> { index, color }
@@ -105,7 +102,6 @@
     var btnAdd = document.getElementById('btnAdd');
     var btnPause = document.getElementById('btnPause');
     var btnClear = document.getElementById('btnClear');
-    var btnAutoY = document.getElementById('btnAutoY');
     var btnExport = document.getElementById('btnExport');
     var selWindow = document.getElementById('selWindow');
     var selInterval = document.getElementById('selInterval');
@@ -129,13 +125,6 @@
         updateYAxisRange();
         chart.update('none');
         vscode.postMessage({ type: 'clear' });
-    });
-
-    btnAutoY.addEventListener('click', function () {
-        yFixed = false;
-        btnAutoY.style.fontWeight = 'normal';
-        updateYAxisRange();
-        chart.update('none');
     });
 
     selWindow.addEventListener('change', function () {
@@ -232,14 +221,8 @@
         });
     }
 
-    // Y 轴自动缩放：基于可见数据范围，上下各留 10% padding；支持固定范围模式
+    // Y 轴自动缩放：基于可见数据范围，上下各留 10% padding
     function updateYAxisRange() {
-        if (yFixed) {
-            chart.options.scales.y.min = yFixedMin;
-            chart.options.scales.y.max = yFixedMax;
-            return;
-        }
-
         var allMin = Infinity, allMax = -Infinity;
         chart.data.datasets.forEach(function (ds) {
             ds.data.forEach(function (pt) {
@@ -264,26 +247,6 @@
         chart.options.scales.y.max = allMax + padding;
     }
 
-    // 计算数据集的统计信息（基于当前可见数据）
-    function computeStats(ds) {
-        if (!ds.data || ds.data.length === 0) {
-            return null;
-        }
-        var min = Infinity, max = -Infinity, sum = 0;
-        for (var i = 0; i < ds.data.length; i++) {
-            var y = ds.data[i].y;
-            if (y < min) min = y;
-            if (y > max) max = y;
-            sum += y;
-        }
-        return {
-            min: min,
-            max: max,
-            avg: sum / ds.data.length,
-            cur: ds.data[ds.data.length - 1].y
-        };
-    }
-
     // 渲染图例
     function renderLegend() {
         legendEl.innerHTML = '';
@@ -298,36 +261,11 @@
             var name = document.createElement('span');
             name.className = 'legend-name';
             name.textContent = ds.label;
-            name.title = 'Double-click to fix Y-axis range';
-            name.style.cursor = 'pointer';
-            name.addEventListener('dblclick', function () {
-                var stats = computeStats(ds);
-                if (!stats) return;
-                var range = stats.max - stats.min;
-                if (range < 1) range = 1;
-                var padding = range * 0.1;
-                yFixedMin = stats.min - padding;
-                yFixedMax = stats.max + padding;
-                yFixed = true;
-                btnAutoY.style.fontWeight = 'bold';
-                updateYAxisRange();
-                chart.update('none');
-            });
 
             var value = document.createElement('span');
             value.className = 'legend-value';
             var lastPoint = ds.data.length > 0 ? ds.data[ds.data.length - 1] : null;
             value.textContent = lastPoint ? lastPoint.y.toFixed(3) : '?';
-
-            var stats = computeStats(ds);
-            var statsEl = document.createElement('span');
-            statsEl.className = 'legend-stats';
-            if (stats) {
-                statsEl.innerHTML =
-                    '<span>max:' + stats.max.toFixed(3) + '</span>' +
-                    '<span>min:' + stats.min.toFixed(3) + '</span>' +
-                    '<span>avg:' + stats.avg.toFixed(3) + '</span>';
-            }
 
             var remove = document.createElement('span');
             remove.className = 'legend-remove';
@@ -340,7 +278,6 @@
             item.appendChild(color);
             item.appendChild(name);
             item.appendChild(value);
-            item.appendChild(statsEl);
             item.appendChild(remove);
             legendEl.appendChild(item);
         });

@@ -183,7 +183,7 @@
         },
         {
           "command": "stm32-live-watch.addToChart",
-          "when": "view == stm32-debug-variables-panel && viewItem =~ /^rootVariable/",
+          "when": "view == stm32-debug-variables-panel && viewItem =~ /^rootVariable|^variable/",
           "group": "navigation"
         }
       ],
