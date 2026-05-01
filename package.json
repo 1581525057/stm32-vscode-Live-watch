@@ -88,6 +88,16 @@
         "command": "stm32-live-watch.showBottomPanel",
         "title": "STM32 Live Watch: Show Variables",
         "icon": "$(eye)"
+      },
+      {
+        "command": "stm32-live-watch.addToChart",
+        "title": "STM32 Live Watch: Add to Chart",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "stm32-live-watch.showChartPanel",
+        "title": "STM32 Live Watch: Show Chart Panel",
+        "icon": "$(graph)"
       }
     ],
     "viewsContainers": {
@@ -95,6 +105,13 @@
         {
           "id": "stm32-debug-panel",
           "title": "STM32 Live Watch",
+          "icon": "resources/icon.svg"
+        }
+      ],
+      "panel": [
+        {
+          "id": "stm32-chart-container",
+          "title": "STM32 Variable Chart",
           "icon": "resources/icon.svg"
         }
       ]
@@ -110,6 +127,13 @@
           "id": "stm32-debug-operations-panel",
           "name": "2. 操作",
           "icon": "resources/icon.svg"
+        }
+      ],
+      "stm32-chart-container": [
+        {
+          "type": "webview",
+          "id": "stm32-debug-chart-panel",
+          "name": "Variable Chart"
         }
       ]
     },
@@ -134,6 +158,11 @@
           "command": "stm32-live-watch.refreshVariables",
           "when": "view == stm32-debug-variables-panel",
           "group": "navigation@4"
+        },
+        {
+          "command": "stm32-live-watch.addToChart",
+          "when": "view == stm32-debug-chart-panel",
+          "group": "navigation@1"
         }
       ],
       "view/item/context": [
@@ -149,6 +178,11 @@
         },
         {
           "command": "stm32-live-watch.deleteVariable",
+          "when": "view == stm32-debug-variables-panel && viewItem =~ /^rootVariable/",
+          "group": "navigation"
+        },
+        {
+          "command": "stm32-live-watch.addToChart",
           "when": "view == stm32-debug-variables-panel && viewItem =~ /^rootVariable/",
           "group": "navigation"
         }
@@ -194,6 +228,18 @@
           "default": 250,
           "minimum": 100,
           "description": "Variable refresh interval in milliseconds (minimum 100ms)"
+        },
+        "stm32LiveWatch.chartRefreshInterval": {
+          "type": "number",
+          "default": 100,
+          "minimum": 50,
+          "description": "Chart data refresh interval in milliseconds (minimum 50ms)"
+        },
+        "stm32LiveWatch.chartTimeWindow": {
+          "type": "number",
+          "default": 10,
+          "minimum": 5,
+          "description": "Chart time window in seconds"
         }
       }
     }
