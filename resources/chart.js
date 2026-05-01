@@ -125,14 +125,15 @@
         vscode.postMessage({ type: 'setInterval', value: parseInt(this.value, 10) });
     });
 
-    // 更新 X 轴范围：始终显示 [elapsed - windowMs, elapsed]
+    // 更新 X 轴范围：始终显示 [elapsed - windowMs, elapsed + padding]
     function updateAxisRange() {
         var windowMs = timeWindow * 1000;
+        var padding = windowMs * 0.05; // 5% 右边距，避免数据线贴着右边缘
         var xMin = elapsed - windowMs;
-        var xMax = elapsed;
+        var xMax = elapsed + padding;
         // 保证最小范围，避免图表为空时轴塌缩
         if (xMin < 0) xMin = 0;
-        if (xMax < windowMs) xMax = windowMs;
+        if (xMax < windowMs + padding) xMax = windowMs + padding;
         chart.options.scales.x.min = xMin;
         chart.options.scales.x.max = xMax;
     }
