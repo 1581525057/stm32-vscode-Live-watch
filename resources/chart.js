@@ -108,7 +108,7 @@
         startTime = 0;
         elapsed = 0;
         updateAxisRange();
-        updateYAxisCenter();
+        updateYAxisRange();
         chart.update('none');
         vscode.postMessage({ type: 'clear' });
     });
@@ -148,24 +148,8 @@
         });
     }
 
-    // Y 轴自动居中：当前值始终在图表垂直中心
-    function updateYAxisCenter() {
-        // 收集所有数据集的最新值
-        var latestValues = [];
-        chart.data.datasets.forEach(function (ds) {
-            if (ds.data.length > 0) {
-                latestValues.push(ds.data[ds.data.length - 1].y);
-            }
-        });
-
-        if (latestValues.length === 0) {
-            // 无数据时重置
-            chart.options.scales.y.min = undefined;
-            chart.options.scales.y.max = undefined;
-            return;
-        }
-
-        // 计算数据的整体范围（用于确定合理的间距）
+    // Y 轴自动缩放：基于可见数据范围，上下各留 10% padding
+    function updateYAxisRange() {
         var allMin = Infinity, allMax = -Infinity;
         chart.data.datasets.forEach(function (ds) {
             ds.data.forEach(function (pt) {
@@ -174,20 +158,20 @@
             });
         });
 
-        // 取最新值的平均值作为中心
-        var center = 0;
-        for (var i = 0; i < latestValues.length; i++) {
-            center += latestValues[i];
+        if (allMin === Infinity) {
+            // 无数据时重置
+            chart.options.scales.y.min = undefined;
+            chart.options.scales.y.max = undefined;
+            return;
         }
-        center /= latestValues.length;
 
-        // 计算半径：取 数据范围的 60% 和 最新值绝对值的 20% 中的较大值
-        // 保证最小半径为 1，避免值为 0 时轴塌缩
-        var dataRange = allMax - allMin;
-        var radius = Math.max(dataRange * 0.6, Math.abs(center) * 0.2, 1);
+        var range = allMax - allMin;
+        // 最小范围为 1，避免值恒定时轴塌缩
+        if (range < 1) range = 1;
+        var padding = range * 0.1; // 上下各 10%
 
-        chart.options.scales.y.min = center - radius;
-        chart.options.scales.y.max = center + radius;
+        chart.options.scales.y.min = allMin - padding;
+        chart.options.scales.y.max = allMax + padding;
     }
 
     // 渲染图例
@@ -296,7 +280,7 @@
         // 更新 X 轴范围，平滑滑动
         updateAxisRange();
         // Y 轴自动居中
-        updateYAxisCenter();
+        updateYAxisRange();
         chart.update('none');
         renderLegend();
     }
@@ -332,7 +316,7 @@
                 startTime = 0;
                 elapsed = 0;
                 updateAxisRange();
-                updateYAxisCenter();
+                updateYAxisRange();
                 chart.update('none');
                 renderLegend();
                 break;
