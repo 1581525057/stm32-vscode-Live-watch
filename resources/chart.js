@@ -200,13 +200,13 @@
             '.csv';
 
         // 触发下载
-        var csvContent = rows.join('\n');
+        var csvContent = '﻿' + rows.join('\n');
         var blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
         var link = document.createElement('a');
         link.href = URL.createObjectURL(blob);
         link.download = filename;
         link.click();
-        URL.revokeObjectURL(link.href);
+        setTimeout(function () { URL.revokeObjectURL(link.href); }, 1000);
     });
 
     // 更新 X 轴范围：始终显示 [elapsed - windowMs, elapsed + padding]
