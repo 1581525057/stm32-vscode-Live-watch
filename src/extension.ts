@@ -199,6 +199,10 @@ export function activate(context: vscode.ExtensionContext) {
         }
     });
 
+    const themeChangeDisposable = vscode.window.onDidChangeActiveColorTheme(() => {
+        chartManagerInstance.notifyThemeChanged();
+    });
+
     context.subscriptions.push(
         startServerCommand,
         stopServerCommand,
@@ -218,7 +222,8 @@ export function activate(context: vscode.ExtensionContext) {
         chartViewDisposable,
         selectionDisposable,
         debugStartDisposable,
-        configChangeDisposable
+        configChangeDisposable,
+        themeChangeDisposable
     );
 }
 

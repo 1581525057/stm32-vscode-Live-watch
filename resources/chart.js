@@ -5,6 +5,18 @@
 (function () {
     const vscode = acquireVsCodeApi();
 
+    // 读取 VS Code 主题 CSS 变量
+    function getThemeColors() {
+        var style = getComputedStyle(document.body);
+        return {
+            gridColor: style.getPropertyValue('--vscode-panel-border').trim() || '#3c3c3c',
+            tickColor: style.getPropertyValue('--vscode-descriptionForeground').trim() || '#999',
+            tooltipBg: style.getPropertyValue('--vscode-editorHoverWidget-background').trim() || '#252526',
+            tooltipBorder: style.getPropertyValue('--vscode-editorHoverWidget-border').trim() || '#45475a',
+            tooltipText: style.getPropertyValue('--vscode-editorHoverWidget-foreground').trim() || '#cccccc'
+        };
+    }
+
     // Catppuccin 调色板
     const COLORS = [
         '#89b4fa', '#a6e3a1', '#f9e2af', '#f38ba8', '#cba6f7',
@@ -23,6 +35,7 @@
 
     // Chart.js 实例
     const ctx = document.getElementById('chartCanvas').getContext('2d');
+    var initColors = getThemeColors();
     const chart = new Chart(ctx, {
         type: 'line',
         data: { datasets: [] },
@@ -39,7 +52,7 @@
                     type: 'linear',
                     title: { display: false },
                     ticks: {
-                        color: '#6c7086',
+                        color: initColors.tickColor,
                         font: { size: 10 },
                         callback: function (value) {
                             // value 是相对于 startTime 的毫秒数
@@ -51,22 +64,22 @@
                         maxTicksLimit: 8,
                         stepSize: 1000
                     },
-                    grid: { color: '#313244' },
+                    grid: { color: initColors.gridColor },
                     min: 0,
                     max: 10000 // 初始值，会被动态更新
                 },
                 y: {
-                    ticks: { color: '#6c7086', font: { size: 10 } },
-                    grid: { color: '#313244' }
+                    ticks: { color: initColors.tickColor, font: { size: 10 } },
+                    grid: { color: initColors.gridColor }
                 }
             },
             plugins: {
                 legend: { display: false },
                 tooltip: {
-                    backgroundColor: '#313244',
-                    titleColor: '#cdd6f4',
-                    bodyColor: '#cdd6f4',
-                    borderColor: '#45475a',
+                    backgroundColor: initColors.tooltipBg,
+                    titleColor: initColors.tooltipText,
+                    bodyColor: initColors.tooltipText,
+                    borderColor: initColors.tooltipBorder,
                     borderWidth: 1,
                     callbacks: {
                         title: function (items) {
@@ -319,6 +332,18 @@
                 updateYAxisRange();
                 chart.update('none');
                 renderLegend();
+                break;
+            case 'themeChanged':
+                var colors = getThemeColors();
+                chart.options.scales.x.ticks.color = colors.tickColor;
+                chart.options.scales.x.grid.color = colors.gridColor;
+                chart.options.scales.y.ticks.color = colors.tickColor;
+                chart.options.scales.y.grid.color = colors.gridColor;
+                chart.options.plugins.tooltip.backgroundColor = colors.tooltipBg;
+                chart.options.plugins.tooltip.titleColor = colors.tooltipText;
+                chart.options.plugins.tooltip.bodyColor = colors.tooltipText;
+                chart.options.plugins.tooltip.borderColor = colors.tooltipBorder;
+                chart.update('none');
                 break;
             default:
                 break;

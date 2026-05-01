@@ -145,6 +145,10 @@ export class ChartManager {
         this.chartVariables = this.workspaceState.get<string[]>(CHART_VARIABLES_KEY, []);
     }
 
+    public notifyThemeChanged(): void {
+        this.webviewProvider?.postMessage({ type: 'themeChanged' });
+    }
+
     public dispose(): void {
         this.stopCollecting();
     }
