@@ -1,5 +1,6 @@
 out/
 build/
+dist/
 node_modules/
 .vscode-test/
 *.vsix
@@ -11,3 +12,5 @@ bin/*.tmp
 .claude/
 .superpowers/
 docs/superpowers/
+bin/server-macos
+bin/server-linux
