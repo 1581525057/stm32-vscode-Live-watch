@@ -10,3 +10,4 @@ __pycache__/
 bin/*.tmp
 .claude/
 .superpowers/
+docs/superpowers/
