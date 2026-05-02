@@ -1,5 +1,7 @@
 # STM32 Live Watch
 
+**中文** | [English](README_EN.md)
+
 发布者：yezi  
 版本：3.3.0  
 适用场景：VS Code + EIDE + Cortex-Debug + OpenOCD 的 STM32 实时变量观察与图表可视化
