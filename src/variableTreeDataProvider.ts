@@ -6,6 +6,15 @@ import { ServerClient } from './serverClient';
 const WATCHED_VARIABLES_KEY = 'stm32LiveWatch.watchedVariables';
 const LEGACY_WATCHED_VARIABLES_KEY = 'stm32DebugHelper.watchedVariables';
 
+// 拖拽功能：自定义 MIME 类型和数据格式
+const DRAG_MIME_TYPE = 'application/vnd.stm32livewatch.variable';
+
+interface DragData {
+    path: string;
+    isRoot: boolean;
+    sourceIndex: number;
+}
+
 export class VariableTreeItem extends vscode.TreeItem {
     constructor(
         public readonly variableInfo: VariableInfo,
@@ -129,17 +138,23 @@ export class InfoTreeItem extends vscode.TreeItem {
     }
 }
 
-export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
+export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.TreeDragAndDropController<vscode.TreeItem> {
     private _onDidChangeTreeData: vscode.EventEmitter<vscode.TreeItem | undefined | null | void> = new vscode.EventEmitter<vscode.TreeItem | undefined | null | void>();
     readonly onDidChangeTreeData: vscode.Event<vscode.TreeItem | undefined | null | void> = this._onDidChangeTreeData.event;
+
+    // TreeDragAndDropController 接口实现
+    readonly dragMimeTypes = [DRAG_MIME_TYPE];
+    readonly dropMimeTypes = [DRAG_MIME_TYPE];
 
     private rootVariables: VariableInfo[] = [];
     private allVariables: Map<string, VariableInfo> = new Map();
     private valueCache: Map<string, any> = new Map();
-    
+    private childrenCache: Map<string, VariableInfo[]> = new Map(); // 缓存 listChildren 结果，避免每 250ms 重复 RPC
+
     private refreshTimer: NodeJS.Timeout | null = null;
     private refreshInterval = 250;
     private isRefreshing = false;
+    private _disposed = false;
 
     constructor(
         private serverClient: ServerClient,
@@ -149,7 +164,99 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
     }
 
     refresh(): void {
+        if (this._disposed) {
+            return;
+        }
         this._onDidChangeTreeData.fire();
+    }
+
+    handleDrag(source: readonly vscode.TreeItem[], dataTransfer: vscode.DataTransfer, _token: vscode.CancellationToken): void {
+        const item = source[0];
+        if (!(item instanceof VariableTreeItem)) {
+            return;
+        }
+
+        const isRoot = item.isRoot;
+        const sourceIndex = isRoot
+            ? this.rootVariables.findIndex(v => v.path === item.variableInfo.path)
+            : -1;
+
+        const dragData: DragData = {
+            path: item.variableInfo.path,
+            isRoot,
+            sourceIndex
+        };
+
+        dataTransfer.set(DRAG_MIME_TYPE, new vscode.DataTransferItem(JSON.stringify(dragData)));
+    }
+
+    async handleDrop(target: vscode.TreeItem | undefined, dataTransfer: vscode.DataTransfer, _token: vscode.CancellationToken): Promise<void> {
+        const item = dataTransfer.get(DRAG_MIME_TYPE);
+        if (!item) {
+            return;
+        }
+
+        let dragData: DragData;
+        try {
+            dragData = JSON.parse(await item.value) as DragData;
+        } catch {
+            return;
+        }
+
+        // 计算目标插入位置
+        let targetIndex = this.rootVariables.length; // 默认追加到末尾
+        if (target instanceof VariableTreeItem && target.isRoot) {
+            targetIndex = this.rootVariables.findIndex(v => v.path === target.variableInfo.path);
+            if (targetIndex === -1) {
+                targetIndex = this.rootVariables.length;
+            }
+        }
+
+        if (dragData.isRoot) {
+            // 排序：移动根变量
+            this.moveRootVariable(dragData.sourceIndex, targetIndex);
+        } else {
+            // 提取：将子成员添加为新的根变量
+            await this.extractAsRootVariable(dragData.path, targetIndex);
+        }
+    }
+
+    private moveRootVariable(fromIndex: number, toIndex: number): void {
+        if (fromIndex === toIndex || fromIndex < 0 || fromIndex >= this.rootVariables.length) {
+            return;
+        }
+
+        const [moved] = this.rootVariables.splice(fromIndex, 1);
+        // 调整目标索引：如果从前面移到后面，索引需要减 1
+        const insertIndex = toIndex > fromIndex ? toIndex - 1 : toIndex;
+        this.rootVariables.splice(insertIndex, 0, moved);
+
+        void this.persistWatchedPaths();
+        this.refresh();
+    }
+
+    private async extractAsRootVariable(path: string, insertIndex: number): Promise<void> {
+        // 检查是否已存在
+        if (this.rootVariables.some(v => v.path === path)) {
+            vscode.window.showInformationMessage(`Variable already watched: ${path}`);
+            return;
+        }
+
+        try {
+            const variableInfo = await this.serverClient.describe(path);
+            if (variableInfo) {
+                this.rootVariables.splice(insertIndex, 0, variableInfo);
+                this.registerVariables([variableInfo]);
+                await this.persistWatchedPaths();
+
+                if (!this.refreshTimer) {
+                    this.startAutoRefresh();
+                }
+                this.refresh();
+            }
+        } catch (error) {
+            vscode.window.showErrorMessage(`Failed to add variable: ${error}`);
+        }
     }
 
     updateRefreshInterval(interval: number): void {
@@ -256,15 +363,18 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
         this.allVariables.clear();
         this.valueCache.clear();
 
-        for (const path of watchedPaths) {
-            try {
-                const variableInfo = await this.serverClient.describe(path);
-                if (variableInfo) {
-                    this.rootVariables.push(variableInfo);
-                    this.registerVariables([variableInfo]);
-                }
-            } catch {
-                console.warn(`Failed to restore watched variable: ${path}`);
+        // 并行调用 describe，避免串行等待多个 RPC 请求
+        const results = await Promise.allSettled(
+            watchedPaths.map(path => this.serverClient.describe(path))
+        );
+
+        for (let i = 0; i < watchedPaths.length; i++) {
+            const result = results[i];
+            if (result.status === 'fulfilled' && result.value) {
+                this.rootVariables.push(result.value);
+                this.registerVariables([result.value]);
+            } else {
+                console.warn(`Failed to restore watched variable: ${watchedPaths[i]}`);
             }
         }
 
@@ -374,10 +484,11 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
             this.rootVariables = this.rootVariables.map(variable =>
                 variable.path === item.variableInfo.path ? variableInfo : variable
             );
-            
+
             // 重新构建索引以防内存泄漏
             this.rebuildVariableIndex();
             this.valueCache.delete(item.variableInfo.path);
+            this.childrenCache.delete(item.variableInfo.path);
             await this.persistWatchedPaths();
             this.refresh();
         } catch (error) {
@@ -392,13 +503,16 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
         }
 
         this.rootVariables = this.rootVariables.filter(variable => variable.path !== item.variableInfo.path);
-        
+
+        // 清除子节点缓存
+        this.childrenCache.delete(item.variableInfo.path);
+
         // 【关键修复 2】：删除根节点时，通过重建来彻底清除它包含的所有子节点缓存
         this.rebuildVariableIndex(); 
         
-        // 清理值缓存 (仅清理前缀匹配的)
+        // 清理值缓存：精确匹配路径或匹配子路径（以 '.' 或 '[' 分隔）
         for (const key of this.valueCache.keys()) {
-            if (key.startsWith(item.variableInfo.path)) {
+            if (key === item.variableInfo.path || key.startsWith(item.variableInfo.path + '.') || key.startsWith(item.variableInfo.path + '[')) {
                 this.valueCache.delete(key);
             }
         }
@@ -429,8 +543,15 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
         }
 
         if (element instanceof VariableTreeItem) {
-            // 请求后端获取子节点
-            const children = await this.serverClient.listChildren(element.variableInfo.path);
+            const path = element.variableInfo.path;
+            // 优先使用缓存，避免每 250ms 刷新时重复 RPC
+            let children = this.childrenCache.get(path);
+            if (!children) {
+                children = await this.serverClient.listChildren(path);
+                if (children && children.length > 0) {
+                    this.childrenCache.set(path, children);
+                }
+            }
             if (children && children.length > 0) {
                 this.registerVariables(children);
                 return this.createTreeItems(children, false);
@@ -478,6 +599,12 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
         this.valueCache.set(path, newValue);
         this.refresh();
     }
+
+    dispose(): void {
+        this._disposed = true;
+        this.stopAutoRefresh();
+        this._onDidChangeTreeData.dispose();
+    }
 }
 
 export class OperationsTreeDataProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
@@ -501,5 +628,9 @@ export class OperationsTreeDataProvider implements vscode.TreeDataProvider<vscod
             new OperationTreeItem('Configure ELF Path', 'file-code', 'stm32-live-watch.configureElfPath'),
             new OperationTreeItem('Generate ELF from AXF', 'tools', 'stm32-live-watch.generateElf')
         ];
+    }
+
+    dispose(): void {
+        this._onDidChangeTreeData.dispose();
     }
 }

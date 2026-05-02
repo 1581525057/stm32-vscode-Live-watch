@@ -1,6 +1,5 @@
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
 
 const platform = process.platform;
 let exeName;
@@ -17,32 +16,18 @@ if (platform === 'win32') {
 }
 
 const binDir = path.join(__dirname, 'bin');
-const outDir = path.join(__dirname, 'out');
-const destDir = path.join(outDir, 'bin');
+const src = path.join(binDir, exeName);
+const destDir = path.join(__dirname, 'out', 'bin');
 
-console.log(`Copying ${exeName} to ${destDir}...`);
-
-try {
-    if (!fs.existsSync(binDir)) {
-        console.log(`Building server executable...`);
-        execSync('python3 build_server.py', { stdio: 'inherit' });
-    }
-
-    if (!fs.existsSync(destDir)) {
-        fs.mkdirSync(destDir, { recursive: true });
-    }
-
-    const srcFile = path.join(binDir, exeName);
-    const destFile = path.join(destDir, exeName);
-
-    if (fs.existsSync(srcFile)) {
-        fs.copyFileSync(srcFile, destFile);
-        console.log(`Successfully copied ${exeName}`);
-    } else {
-        console.error(`Error: ${exeName} not found in ${binDir}`);
-        process.exit(1);
-    }
-} catch (error) {
-    console.error('Error:', error.message);
+if (!fs.existsSync(src)) {
+    console.error(`Server executable not found: ${src}`);
     process.exit(1);
 }
+
+if (!fs.existsSync(destDir)) {
+    fs.mkdirSync(destDir, { recursive: true });
+}
+
+const dest = path.join(destDir, exeName);
+fs.copyFileSync(src, dest);
+console.log(`Copied ${exeName} (${(fs.statSync(dest).size / 1024 / 1024).toFixed(1)}MB)`);

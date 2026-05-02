@@ -10,6 +10,7 @@ import { ChartViewProvider } from './chartPanel';
 
 let serverClient: ServerClient;
 let variableTreeDataProvider: VariableTreeDataProvider;
+let operationsTreeDataProvider: OperationsTreeDataProvider;
 let autoStartInProgress: Promise<void> | undefined;
 let chartManager: ChartManager;
 
@@ -19,7 +20,7 @@ export function activate(context: vscode.ExtensionContext) {
     const serverScriptPath = resolveServerScriptPath(context.extensionPath);
     serverClient = new ServerClient(serverScriptPath);
     variableTreeDataProvider = new VariableTreeDataProvider(serverClient, context.workspaceState);
-    const operationsTreeDataProvider = new OperationsTreeDataProvider();
+    operationsTreeDataProvider = new OperationsTreeDataProvider();
     const chartManagerInstance = new ChartManager(serverClient, context.workspaceState);
     chartManager = chartManagerInstance;
     const chartViewProvider = new ChartViewProvider(context.extensionUri, (msg) => chartManagerInstance.handleWebviewMessage(msg));
@@ -159,6 +160,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     panelTreeView = vscode.window.createTreeView('stm32-debug-variables-panel', {
         treeDataProvider: variableTreeDataProvider,
+        dragAndDropController: variableTreeDataProvider,
         showCollapseAll: true
     });
     const operationsTreeView = vscode.window.createTreeView('stm32-debug-operations-panel', {
@@ -186,6 +188,14 @@ export function activate(context: vscode.ExtensionContext) {
                 chartManagerInstance.startCollecting();
             });
         });
+    });
+
+    // 调试会话结束时停止数据采集，避免对已断开的 OpenOCD 连续超时
+    const debugTerminateDisposable = vscode.debug.onDidTerminateDebugSession((session) => {
+        if (session.type !== 'cortex-debug') {
+            return;
+        }
+        chartManagerInstance.stopCollecting();
     });
 
     const configChangeDisposable = vscode.workspace.onDidChangeConfiguration((event) => {
@@ -222,6 +232,7 @@ export function activate(context: vscode.ExtensionContext) {
         chartViewDisposable,
         selectionDisposable,
         debugStartDisposable,
+        debugTerminateDisposable,
         configChangeDisposable,
         themeChangeDisposable
     );
@@ -324,9 +335,11 @@ async function ensureServerRunning(showSuccessMessage: boolean): Promise<void> {
 
     try {
         await autoStartInProgress;
-    } finally {
+    } catch (e) {
         autoStartInProgress = undefined;
+        throw e;
     }
+    autoStartInProgress = undefined;
 }
 
 async function resolveElfPath(config: vscode.WorkspaceConfiguration): Promise<ResolveElfResult> {
@@ -383,6 +396,12 @@ function showStartServerError(error: unknown): void {
 }
 
 export function deactivate() {
+    if (variableTreeDataProvider) {
+        variableTreeDataProvider.dispose();
+    }
+    if (operationsTreeDataProvider) {
+        operationsTreeDataProvider.dispose();
+    }
     if (serverClient) {
         serverClient.stop();
     }

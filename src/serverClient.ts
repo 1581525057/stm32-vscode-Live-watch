@@ -135,6 +135,12 @@ export class ServerClient {
                 }
             } catch (error) {
                 console.error('Failed to parse response:', line, error);
+                // 解析失败时也要释放 activeRequest，防止永久阻塞
+                const pending = this.activeRequest;
+                if (pending) {
+                    this.activeRequest = null;
+                    pending.reject(new Error(`Invalid response from server: ${line.substring(0, 100)}`));
+                }
             }
         }
     }
@@ -190,7 +196,12 @@ export class ServerClient {
             this.process.kill();
             this.process = null;
         }
-        this.activeRequest = null;
+        // 拒绝当前活跃请求，防止调用方 Promise 永久挂起
+        if (this.activeRequest) {
+            this.activeRequest.reject(new Error('Server stopped'));
+            this.activeRequest = null;
+        }
+        this.buffer = '';
         this.requestQueue = Promise.resolve();
     }
 

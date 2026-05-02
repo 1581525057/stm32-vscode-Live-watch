@@ -19,6 +19,7 @@ export class ChartManager {
     private paused = false;
     private isCollecting = false;
     private colorIndex = 0;
+    private colorMap = new Map<string, string>(); // path -> color，保证颜色分配一致
     private webviewProvider: ChartViewProvider | undefined;
 
     constructor(
@@ -54,6 +55,7 @@ export class ChartManager {
 
         const color = CHART_COLORS[this.colorIndex % CHART_COLORS.length];
         this.colorIndex++;
+        this.colorMap.set(path, color);
 
         this.webviewProvider?.postMessage({
             type: 'addVariable',
@@ -143,6 +145,14 @@ export class ChartManager {
 
     public async restoreVariables(): Promise<void> {
         this.chartVariables = this.workspaceState.get<string[]>(CHART_VARIABLES_KEY, []);
+        // 同步 colorIndex，避免新添加变量时颜色与已恢复变量冲突
+        this.colorIndex = this.chartVariables.length;
+        // 为恢复的变量分配颜色（与 syncVariablesToWebview 一致）
+        this.chartVariables.forEach((path, i) => {
+            if (!this.colorMap.has(path)) {
+                this.colorMap.set(path, CHART_COLORS[i % CHART_COLORS.length]);
+            }
+        });
     }
 
     public notifyThemeChanged(): void {
@@ -158,6 +168,10 @@ export class ChartManager {
             return;
         }
         if (this.chartVariables.length === 0) {
+            return;
+        }
+        // 面板不可见时跳过数据采集，节省后端请求
+        if (!this.webviewProvider?.isVisible()) {
             return;
         }
 
@@ -204,7 +218,7 @@ export class ChartManager {
     private syncVariablesToWebview(): void {
         for (let i = 0; i < this.chartVariables.length; i++) {
             const path = this.chartVariables[i];
-            const color = CHART_COLORS[i % CHART_COLORS.length];
+            const color = this.colorMap.get(path) || CHART_COLORS[i % CHART_COLORS.length];
             this.webviewProvider?.postMessage({
                 type: 'addVariable',
                 path: path,

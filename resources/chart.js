@@ -23,11 +23,28 @@
         '#94e2d5', '#fab387', '#74c7ec', '#f5c2e7', '#b4befe'
     ];
 
+    // 二分查找第一个 >= cutoff 的位置（数据已按时间排序，O(log n)）
+    function findCutoffIndex(data, cutoff) {
+        var lo = 0, hi = data.length;
+        while (lo < hi) {
+            var mid = (lo + hi) >> 1;
+            if (data[mid].x < cutoff) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        return lo;
+    }
+
     // 状态
     let paused = false;
     let timeWindow = 10; // 秒
     let colorIndex = 0;
-    const datasets = new Map(); // path -> { index, color }
+    const datasets = new Map(); // path -> { index, color, valueEl }
+    // 增量追踪 Y 轴 min/max，避免全量扫描
+    let yMin = Infinity, yMax = -Infinity;
+    let trimCount = 0; // 裁剪计数器，用于延迟重算 Y 轴范围
 
     // 相对时间基准：首次收到数据时记录，后续所有时间相对于此
     let startTime = 0;
@@ -118,12 +135,7 @@
     });
 
     btnClear.addEventListener('click', function () {
-        chart.data.datasets.forEach(function (ds) { ds.data = []; });
-        startTime = 0;
-        elapsed = 0;
-        updateAxisRange();
-        updateYAxisRange();
-        chart.update('none');
+        resetChart();
         vscode.postMessage({ type: 'clear' });
     });
 
@@ -131,6 +143,8 @@
         timeWindow = parseInt(this.value, 10);
         updateAxisRange();
         trimOldData();
+        recalcYRange();
+        updateYAxisRange();
         chart.update('none');
         vscode.postMessage({ type: 'setWindow', value: timeWindow });
     });
@@ -160,19 +174,22 @@
             header += ',' + ds.label;
         });
 
+        // 为每个数据集建立 x -> y 的索引，避免 O(T*D*P) 嵌套查找
+        var dsIndex = chart.data.datasets.map(function (ds) {
+            var map = new Map();
+            ds.data.forEach(function (pt) {
+                map.set(pt.x, pt.y);
+            });
+            return map;
+        });
+
         // 构建数据行
         var rows = [header];
         timestamps.forEach(function (ts) {
             var row = (ts / 1000).toFixed(3);
-            chart.data.datasets.forEach(function (ds) {
-                var found = null;
-                for (var i = 0; i < ds.data.length; i++) {
-                    if (ds.data[i].x === ts) {
-                        found = ds.data[i].y;
-                        break;
-                    }
-                }
-                row += ',' + (found !== null ? found.toFixed(3) : '');
+            chart.data.datasets.forEach(function (ds, i) {
+                var found = dsIndex[i].get(ts);
+                row += ',' + (found !== undefined ? found.toFixed(3) : '');
             });
             rows.push(row);
         });
@@ -211,40 +228,45 @@
         chart.options.scales.x.max = xMax;
     }
 
-    // 裁剪超出窗口的旧数据
+    // 裁剪超出窗口的旧数据（二分查找 O(log n) + 批量 splice）
     function trimOldData() {
         var cutoff = elapsed - timeWindow * 1000;
         chart.data.datasets.forEach(function (ds) {
-            while (ds.data.length > 0 && ds.data[0].x < cutoff) {
-                ds.data.shift();
+            if (ds.data.length === 0 || ds.data[0].x >= cutoff) return;
+            var removeCount = findCutoffIndex(ds.data, cutoff);
+            if (removeCount > 0) {
+                ds.data.splice(0, removeCount);
             }
         });
     }
 
-    // Y 轴自动缩放：基于可见数据范围，上下各留 10% padding
+    // Y 轴自动缩放：使用增量追踪的 yMin/yMax，避免全量扫描
     function updateYAxisRange() {
-        var allMin = Infinity, allMax = -Infinity;
-        chart.data.datasets.forEach(function (ds) {
-            ds.data.forEach(function (pt) {
-                if (pt.y < allMin) allMin = pt.y;
-                if (pt.y > allMax) allMax = pt.y;
-            });
-        });
-
-        if (allMin === Infinity) {
-            // 无数据时重置
+        if (yMin === Infinity) {
             chart.options.scales.y.min = undefined;
             chart.options.scales.y.max = undefined;
             return;
         }
 
-        var range = allMax - allMin;
-        // 最小范围为 1，避免值恒定时轴塌缩
+        var range = yMax - yMin;
         if (range < 1) range = 1;
-        var padding = range * 0.1; // 上下各 10%
+        var padding = range * 0.1;
 
-        chart.options.scales.y.min = allMin - padding;
-        chart.options.scales.y.max = allMax + padding;
+        chart.options.scales.y.min = yMin - padding;
+        chart.options.scales.y.max = yMax + padding;
+    }
+
+    // 从所有数据集中重新计算 yMin/yMax（仅在删除变量或清空时调用）
+    function recalcYRange() {
+        yMin = Infinity;
+        yMax = -Infinity;
+        chart.data.datasets.forEach(function (ds) {
+            for (var i = 0; i < ds.data.length; i++) {
+                var v = ds.data[i].y;
+                if (v < yMin) yMin = v;
+                if (v > yMax) yMax = v;
+            }
+        });
     }
 
     // 完整重建图例 DOM（仅在添加/删除变量时调用）
@@ -267,6 +289,9 @@
             value.setAttribute('data-label', ds.label);
             var lastPoint = ds.data.length > 0 ? ds.data[ds.data.length - 1] : null;
             value.textContent = lastPoint ? lastPoint.y.toFixed(3) : '?';
+            // 缓存 DOM 引用，避免每 250ms querySelectorAll
+            var dsInfo = datasets.get(ds.label);
+            if (dsInfo) { dsInfo.valueEl = value; }
 
             var remove = document.createElement('span');
             remove.className = 'legend-remove';
@@ -286,21 +311,13 @@
 
     // 只更新图例的值文本，不重建 DOM（高频调用时使用）
     function updateLegendValues() {
-        var valueEls = legendEl.querySelectorAll('.legend-value');
-        for (var i = 0; i < valueEls.length; i++) {
-            var el = valueEls[i];
-            var label = el.getAttribute('data-label');
-            var ds = null;
-            for (var j = 0; j < chart.data.datasets.length; j++) {
-                if (chart.data.datasets[j].label === label) {
-                    ds = chart.data.datasets[j];
-                    break;
-                }
-            }
+        datasets.forEach(function (info, label) {
+            if (!info.valueEl) return;
+            var ds = chart.data.datasets[info.index];
             if (ds && ds.data.length > 0) {
-                el.textContent = ds.data[ds.data.length - 1].y.toFixed(3);
+                info.valueEl.textContent = ds.data[ds.data.length - 1].y.toFixed(3);
             }
-        }
+        });
     }
 
     // 添加变量
@@ -340,6 +357,9 @@
             val.index = idx++;
         });
 
+        // 重算 Y 轴范围（被移除的数据集可能包含 yMin/yMax）
+        recalcYRange();
+        updateYAxisRange();
         chart.update('none');
         renderLegend();
         vscode.postMessage({ type: 'removeVariable', path: path });
@@ -355,20 +375,40 @@
         // 更新已流逝时间
         elapsed = Date.now() - startTime;
         var windowMs = timeWindow * 1000;
+        var cutoff = elapsed - windowMs;
+        var trimmed = false;
 
         points.forEach(function (point) {
             var info = datasets.get(point.path);
             if (info === undefined) return;
 
             var ds = chart.data.datasets[info.index];
-            ds.data.push({ x: elapsed, y: point.value });
+            var v = point.value;
+            ds.data.push({ x: elapsed, y: v });
 
-            // 裁剪超出窗口的数据
-            var cutoff = elapsed - windowMs;
-            while (ds.data.length > 0 && ds.data[0].x < cutoff) {
-                ds.data.shift();
+            // 增量更新 Y 轴范围
+            if (v < yMin) yMin = v;
+            if (v > yMax) yMax = v;
+
+            // 批量裁剪超出窗口的数据（二分查找 O(log n) + 一次 splice）
+            if (ds.data.length > 0 && ds.data[0].x < cutoff) {
+                var removeCount = findCutoffIndex(ds.data, cutoff);
+                if (removeCount > 0) {
+                    ds.data.splice(0, removeCount);
+                    trimmed = true;
+                }
             }
         });
+
+        // 裁剪后延迟重算 Y 轴范围（避免每次 250ms 都全量扫描）
+        // 增量追踪已覆盖新数据，这里只处理被驱逐的极值点
+        if (trimmed) {
+            trimCount++;
+            if (trimCount >= 10) {
+                recalcYRange();
+                trimCount = 0;
+            }
+        }
 
         // 更新 X 轴范围，平滑滑动
         updateAxisRange();
@@ -378,11 +418,26 @@
         updateLegendValues();
     }
 
+    // 重置图表数据和状态
+    function resetChart() {
+        chart.data.datasets.forEach(function (ds) { ds.data = []; });
+        startTime = 0;
+        elapsed = 0;
+        yMin = Infinity;
+        yMax = -Infinity;
+        trimCount = 0;
+        updateAxisRange();
+        updateYAxisRange();
+        chart.update('none');
+    }
+
     // 设置时间窗口
     function setTimeWindow(seconds) {
         timeWindow = seconds;
         updateAxisRange();
         trimOldData();
+        recalcYRange();
+        updateYAxisRange();
         chart.update('none');
     }
 
@@ -405,12 +460,7 @@
                 setTimeWindow(msg.value);
                 break;
             case 'clear':
-                chart.data.datasets.forEach(function (ds) { ds.data = []; });
-                startTime = 0;
-                elapsed = 0;
-                updateAxisRange();
-                updateYAxisRange();
-                chart.update('none');
+                resetChart();
                 renderLegend();
                 break;
             case 'themeChanged':

@@ -1,7 +1,7 @@
 # STM32 Live Watch
 
 发布者：yezi  
-版本：3.1.0  
+版本：3.3.0  
 适用场景：VS Code + EIDE + Cortex-Debug + OpenOCD 的 STM32 实时变量观察与图表可视化
 
 `stm32-vscode-Live-watch` 是一个面向 STM32 调试阶段的 VS Code 扩展。它不会替代调试器，而是在现有 EIDE、Cortex-Debug、OpenOCD 工作流旁边增加一个更直接的实时变量观察界面：你编译工程、启动调试、添加变量，扩展负责从 ELF 调试信息里解析变量地址，并通过 OpenOCD 读取目标板内存。
@@ -36,6 +36,19 @@
 - 图例区域实时显示每个变量的最大值、最小值和均值统计。
 - 双击图例变量名可固定 Y 轴范围，Auto Y 按钮一键恢复自动缩放。
 - 新增 Export 按钮，一键导出图表数据为 CSV 文件，支持 Excel 打开。
+
+3.3.0 Bug 修复与性能优化：
+
+- 修复 C++ 静态成员变量（如 `DJI_Motor_Class::DJI_Yaw_Motor`）无法展开的 Bug。
+- 新增 `union` 类型支持，联合体现在可正确展开成员。
+- 修复枚举类型高字节值被错误符号扩展的问题（如 `255` 显示为 `-1`）。
+- 修复 `stop()` 未拒绝活跃请求导致调用方 Promise 永久挂起的问题。
+- 修复 `stop()` 未清空 buffer 导致重启后 JSON 解析失败的问题。
+- 新增调试会话结束时自动停止图表数据采集，避免无意义的超时请求。
+- 图表颜色分配一致性修复，移除再添加变量不再变色。
+- 图例值更新改用缓存 DOM 引用，消除每 250ms 的 `querySelectorAll` 开销。
+- 变量树 `listChildren` 结果缓存，展开节点不再每 250ms 重复 RPC 调用。
+- 网络接收缓冲区优化，解决大响应时的 O(n²) 内存分配问题。
 
 ## 它解决什么问题
 
@@ -325,7 +338,7 @@ fromelf.exe --elf --output build/app.elf build/app.axf
 ### 方法一：从 GitHub Releases 下载 VSIX 安装（推荐）
 
 1. 打开 [Releases 页面](https://github.com/1581525057/stm32-vscode-Live-watch/releases)。
-2. 下载最新版本的 `.vsix` 文件，例如 `stm32-vscode-Live-watch-2.1.0.vsix`。
+2. 下载最新版本的 `.vsix` 文件，例如 `stm32-vscode-Live-watch-3.3.0.vsix`。
 3. 打开 VS Code。
 4. 按 `Ctrl+Shift+P`，输入 `vsix`，选择 `Extensions: Install from VSIX...`。
 5. 在文件选择窗口中，找到刚才下载的 `.vsix` 文件，点击打开。
@@ -521,7 +534,7 @@ stm32-vscode-Live-watch/
 
 - 扩展名：`stm32-vscode-Live-watch`
 - 发布者：`yezi`
-- 版本：`3.1.0`
+- 版本：`3.3.0`
 - 仓库：<https://github.com/1581525057/stm32-vscode-Live-watch>
 
 ## 致谢

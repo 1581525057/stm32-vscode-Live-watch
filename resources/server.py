@@ -2,6 +2,7 @@ import argparse
 import json
 import socket
 import struct
+import sys
 import threading
 import math
 from pathlib import Path
@@ -62,15 +63,15 @@ class TclRpcClient:
                 return ""
             try:
                 self.sock.sendall(cmd.encode("ascii") + b"\x1a")
-                res = b""
+                chunks = []
                 while True:
-                    chunk = self.sock.recv(4096)
+                    chunk = self.sock.recv(16384)
                     if not chunk:
                         break
-                    res += chunk
+                    chunks.append(chunk)
                     if b"\x1a" in chunk:
                         break
-                return res.decode("ascii", errors="ignore").strip("\x1a")
+                return b"".join(chunks).decode("ascii", errors="ignore").strip("\x1a")
             except Exception:
                 self._connect()
                 return ""
@@ -78,45 +79,43 @@ class TclRpcClient:
     def batch_read(self, nodes: list[VariableNode]) -> list[Any]:
         if not nodes:
             return []
-        sorted_nodes = sorted(nodes, key=lambda node: node.addr)
-        results_map: dict[int, Any] = {}
+        # 记录原始索引，用于返回结果与输入对齐
+        indexed_nodes = list(enumerate(nodes))
+        sorted_indexed = sorted(indexed_nodes, key=lambda x: x[1].addr)
+        results_list: list[Any] = [None] * len(nodes)
         i = 0
-        while i < len(sorted_nodes):
-            start_node = sorted_nodes[i]
+        while i < len(sorted_indexed):
+            start_node = sorted_indexed[i][1]
+            # 问题1修复：只合并 size==4 的连续 4 字节节点
             count = 1
-            while i + count < len(sorted_nodes):
-                next_node = sorted_nodes[i + count]
-                if next_node.addr != start_node.addr + count * 4:
-                    break
-                count += 1
-                
+            if start_node.size == 4:
+                while i + count < len(sorted_indexed):
+                    next_node = sorted_indexed[i + count][1]
+                    if next_node.size != 4 or next_node.addr != start_node.addr + count * 4:
+                        break
+                    count += 1
+
             raw_res = self._send_rpc(f'capture "mdw {hex(start_node.addr)} {count}"')
-            
-            # ======== 修复点：全新且健壮的多行数据解析逻辑 ========
+
+            # 健壮的多行数据解析逻辑
             values = []
             for line in raw_res.splitlines():
-                # 如果有冒号，说明是 "0x200000e0: " 这种地址头，丢弃冒号和之前的内容
                 if ':' in line:
                     line = line.split(':', 1)[1]
-                
-                # 按空格分割剩下的纯数据部分
                 for token in line.split():
-                    # 只要是纯十六进制字符，就认为是有效数据
                     if all(c in "0123456789abcdefABCDEF" for c in token):
                         values.append(token)
-            # ======================================================
 
             for j in range(count):
-                curr_node = sorted_nodes[i + j]
+                orig_idx, curr_node = sorted_indexed[i + j]
                 if j < len(values):
                     raw_int = int(values[j], 16)
-                    # 确保调用你最新修改的 _parse_raw_value 或 _parse_raw_int
-                    results_map[curr_node.addr] = self._parse_raw_value(raw_int, curr_node) 
+                    results_list[orig_idx] = self._parse_raw_value(raw_int, curr_node)
                 else:
-                    results_map[curr_node.addr] = "N/A"
+                    results_list[orig_idx] = "N/A"
             i += count
-            
-        return [results_map.get(node.addr, "N/A") for node in nodes]
+
+        return [r if r is not None else "N/A" for r in results_list]
 
     def read_raw_bytes(self, addr: int, size: int) -> bytes:
         """底层方法：使用 mdb 读取指定长度的纯字节流"""
@@ -173,7 +172,8 @@ class TclRpcClient:
         try:
             # 🔥 新增：通过类型名智能判定是否为无符号整数
             type_str = node.type_name.lower()
-            is_unsigned = "unsigned" in type_str or "uint" in type_str
+            # 枚举类型不做符号扩展，DWARF 中枚举值始终为逻辑值
+            is_unsigned = node.type == "enum" or "unsigned" in type_str or "uint" in type_str
 
             # 1. 处理 1 字节整数 (int8_t, uint8_t, char)
             if node.size == 1:
@@ -197,7 +197,7 @@ class TclRpcClient:
 
             # 3. 处理浮点数
             if node.type == "float":
-                return struct.unpack("<f", struct.pack("<I", raw_int))[0]
+                return round(struct.unpack("<f", struct.pack("<I", raw_int))[0], 4)
 
             # 4. 处理 4 字节整数 (int32_t, uint32_t, int)
             val = raw_int & 0xFFFFFFFF
@@ -244,6 +244,13 @@ class TclRpcClient:
             else:
                 cmd_type = "mww" if node.size >= 4 else "mwh" if node.size == 2 else "mwb"
                 raw_value = struct.unpack("<I", struct.pack("<f", float(val)))[0] if node.type == "float" else int(val, 0)
+                # 掩码确保非负，避免 hex() 产生 "-0x1" 这样的无效格式
+                if node.size == 1:
+                    raw_value &= 0xFF
+                elif node.size == 2:
+                    raw_value &= 0xFFFF
+                elif node.size == 4:
+                    raw_value &= 0xFFFFFFFF
                 self._send_rpc(f"{cmd_type} {hex(node.addr)} {hex(raw_value)}")
                 return True
         except Exception:
@@ -253,35 +260,72 @@ class TclRpcClient:
 class ElfExpert:
     def __init__(self, path: str):
         self.root_vars: dict[str, VariableNode] = {}
+        # 记录根变量的基本信息，用于按需展开（懒加载）
+        self.root_var_info: dict[str, tuple[int, int, int]] = {}  # name -> (addr, type_off, cu_off)
+        # 优化#2：预计算的根变量类型信息缓存
+        self.root_var_cache: dict[str, dict[str, Any]] = {}  # name -> {type_name, size, has_children}
         self.type_die_map: dict[tuple[int, int], Any] = {}
+        self.type_off_to_cu: dict[int, int] = {}  # 优化#1：反向索引，type_off -> 第一个 cu_off
         self.type_definition_map: dict[tuple[Any, ...], Any] = {}
         with open(path, "rb") as file:
             elffile = ELFFile(file)
             dwarf = elffile.get_dwarf_info()
+            symtab = elffile.get_section_by_name(".symtab")
+            self.addr_map: dict[str, int] = {}
+            if symtab:
+                self.addr_map = {symbol.name: symbol["st_value"] for symbol in symtab.iter_symbols() if symbol.name}
+            # 单次遍历：同时建图和收集变量
             for cu in dwarf.iter_CUs():
                 for die in cu.iter_DIEs():
                     if die.tag:
                         self.type_die_map[(cu.cu_offset, die.offset)] = die
+                        self.type_off_to_cu.setdefault(die.offset, cu.cu_offset)
                         self._register_type_definition(cu.cu_offset, die)
-            symtab = elffile.get_section_by_name(".symtab")
-            addr_map = {}
-            if symtab:
-                addr_map = {symbol.name: symbol["st_value"] for symbol in symtab.iter_symbols() if symbol.name}
-            for cu in dwarf.iter_CUs():
-                for die in cu.iter_DIEs():
-                    if die.tag != "DW_TAG_variable":
-                        continue
-                    name_attr = self._get_attr(die, "DW_AT_name", cu.cu_offset)
-                    type_attr, _, type_cu_off = self._get_attr_context(die, "DW_AT_type", cu.cu_offset)
-                    if not (name_attr and type_attr):
-                        continue
-                    name = self._decode_attr_value(name_attr)
-                    addr = self._resolve_variable_address(die, cu, addr_map)
-                    if addr is None:
-                        continue
-                    node = self._expand_node(name, addr, self._resolve_type_offset(type_attr, type_cu_off), type_cu_off, 0)
-                    if node:
-                        self.root_vars[name] = node
+                    if die.tag == "DW_TAG_variable":
+                        name_attr = self._get_attr(die, "DW_AT_name", cu.cu_offset)
+                        type_attr, _, type_cu_off = self._get_attr_context(die, "DW_AT_type", cu.cu_offset)
+                        if not (name_attr and type_attr):
+                            continue
+                        name = self._decode_attr_value(name_attr)
+                        addr = self._resolve_variable_address(die, cu, self.addr_map)
+                        if addr is None:
+                            continue
+                        type_off = self._resolve_type_offset(type_attr, type_cu_off)
+                        self.root_var_info[name] = (addr, type_off, type_cu_off)
+            # 优化#2：预计算每个根变量的类型信息，避免 list_roots 重复查找
+            for name, (addr, type_off, cu_off) in self.root_var_info.items():
+                self.root_var_cache[name] = self._resolve_type_info(type_off, cu_off)
+
+    def _resolve_type_info(self, type_off: int, cu_off: int) -> dict[str, Any]:
+        """沿 typedef/const/volatile 链解析真实类型名、大小和 has_children"""
+        die = self._lookup_type_die(cu_off, type_off)
+        if not die:
+            return {"type_name": "", "size": 0, "has_children": False}
+        # 获取初始类型名和大小
+        name_attr = die.attributes.get("DW_AT_name")
+        type_name = name_attr.value.decode("utf-8") if name_attr else ""
+        byte_size = die.attributes.get("DW_AT_byte_size")
+        size = byte_size.value if byte_size else 0
+        # 沿修饰链追踪到真实类型，visited 防止环形引用导致死循环
+        visited: set[int] = set()
+        real_die = die
+        while real_die and real_die.tag in ("DW_TAG_volatile_type", "DW_TAG_const_type", "DW_TAG_typedef"):
+            if real_die.offset in visited:
+                break
+            visited.add(real_die.offset)
+            next_type = real_die.attributes.get("DW_AT_type")
+            if not next_type:
+                break
+            real_die_cu_off = self._die_cu_offset(real_die, cu_off)
+            real_die = self._lookup_type_die(real_die_cu_off, self._resolve_type_offset(next_type, real_die_cu_off))
+        if real_die:
+            name_attr = real_die.attributes.get("DW_AT_name")
+            if name_attr:
+                type_name = name_attr.value.decode("utf-8")
+            byte_size = real_die.attributes.get("DW_AT_byte_size")
+            size = byte_size.value if byte_size else size
+        has_children = real_die.tag in ("DW_TAG_structure_type", "DW_TAG_class_type", "DW_TAG_union_type", "DW_TAG_array_type") if real_die else False
+        return {"type_name": type_name, "size": size, "has_children": has_children}
 
     def _decode_attr_string(self, die: Any, attr_name: str) -> str | None:
         attr = die.attributes.get(attr_name)
@@ -337,7 +381,7 @@ class ElfExpert:
         return bool(declaration_attr and declaration_attr.value)
 
     def _register_type_definition(self, cu_off: int, die: Any) -> None:
-        if die.tag not in ("DW_TAG_structure_type", "DW_TAG_class_type"):
+        if die.tag not in ("DW_TAG_structure_type", "DW_TAG_class_type", "DW_TAG_union_type"):
             return
         if self._is_declaration_die(die):
             return
@@ -346,9 +390,13 @@ class ElfExpert:
             return
         self.type_definition_map[(cu_off, die.tag, type_name)] = die
         self.type_definition_map[(die.tag, type_name)] = die
+        # 同时注册互补 tag，解决 C++ 编译器 class/struct tag 不一致问题
+        alt_tag = "DW_TAG_structure_type" if die.tag == "DW_TAG_class_type" else "DW_TAG_class_type"
+        self.type_definition_map.setdefault((cu_off, alt_tag, type_name), die)
+        self.type_definition_map.setdefault((alt_tag, type_name), die)
 
     def _find_full_type_definition(self, die: Any, cu_off: int) -> Any:
-        if die.tag not in ("DW_TAG_structure_type", "DW_TAG_class_type"):
+        if die.tag not in ("DW_TAG_structure_type", "DW_TAG_class_type", "DW_TAG_union_type"):
             return die
         if not self._is_declaration_die(die):
             return die
@@ -356,11 +404,20 @@ class ElfExpert:
         if not type_name:
             return die
         type_definition_map = getattr(self, "type_definition_map", {})
-        return (
+        # 尝试同 tag 查找
+        result = (
             type_definition_map.get((cu_off, die.tag, type_name))
             or type_definition_map.get((die.tag, type_name))
-            or die
         )
+        if result:
+            return result
+        # C++ 编译器可能用 DW_TAG_class_type 声明但 DW_TAG_structure_type 定义（或反之），互查
+        alt_tag = "DW_TAG_structure_type" if die.tag == "DW_TAG_class_type" else "DW_TAG_class_type"
+        result = (
+            type_definition_map.get((cu_off, alt_tag, type_name))
+            or type_definition_map.get((alt_tag, type_name))
+        )
+        return result or die
 
     def _resolve_type_offset(self, type_attr: Any, cu_off: int) -> int:
         if getattr(type_attr, "form", "") == "DW_FORM_ref_addr":
@@ -368,12 +425,13 @@ class ElfExpert:
         return type_attr.value + cu_off
 
     def _lookup_type_die(self, cu_off: int, type_off: int) -> Any:
+        # 优化#1：精确查找 O(1)，失败后通过反向索引 O(1) 定位 cu_off
         die = self.type_die_map.get((cu_off, type_off))
         if die:
             return die
-        for candidate_cu_off, candidate_type_off in self.type_die_map:
-            if candidate_type_off == type_off:
-                return self.type_die_map[(candidate_cu_off, candidate_type_off)]
+        candidate_cu = self.type_off_to_cu.get(type_off)
+        if candidate_cu is not None:
+            return self.type_die_map.get((candidate_cu, type_off))
         return None
 
     def _parse_location_address(self, expr: Any, cu: Any) -> int | None:
@@ -394,13 +452,15 @@ class ElfExpert:
         return None
 
     def _resolve_variable_address(self, die: Any, cu: Any, addr_map: dict[str, int]) -> int | None:
+        cu_off = getattr(cu, "cu_offset", 0)
+        name_attr = self._get_attr(die, "DW_AT_name", cu_off)
+        var_name = self._decode_attr_value(name_attr) if name_attr else "<unknown>"
         loc_attr = die.attributes.get("DW_AT_location")
         if loc_attr:
             addr = self._parse_location_address(loc_attr.value, cu)
             if addr is not None:
                 return addr
 
-        cu_off = getattr(cu, "cu_offset", 0)
         for attr_name in ("DW_AT_linkage_name", "DW_AT_MIPS_linkage_name", "DW_AT_name"):
             name_attr = self._get_attr(die, attr_name, cu_off)
             name = self._decode_attr_value(name_attr) if name_attr else None
@@ -443,8 +503,6 @@ class ElfExpert:
         dims: 剩余维度的列表，例如 [2, 3] 表示当前是 2x3 的数组
         elem_size: 最小单个元素的字节大小
         """
-        import math
-        
         count = dims[0] # 当前维度的元素个数
         # 计算当前维度下，每一个元素的跨度（Stride）
         # 例如 int a[2][3]，第一层的 stride 是 3个int的大小，即 12字节
@@ -471,14 +529,14 @@ class ElfExpert:
     def _expand_node(self, name: str, addr: int, type_off: int, cu_off: int, depth: int) -> VariableNode | None:
         if depth > 15:
             return None
-            
+
         die = self._lookup_type_die(cu_off, type_off)
         if not die:
             return None
 
         name_attr = die.attributes.get("DW_AT_name")
         type_name = name_attr.value.decode("utf-8") if name_attr else ""
-        
+
         # 统一获取当前类型的字节大小 (重要：用于步长计算)
         byte_size = die.attributes.get("DW_AT_byte_size")
         current_size = byte_size.value if byte_size else 0
@@ -486,9 +544,11 @@ class ElfExpert:
         # --- 1. 处理修饰类型 ---
         if die.tag in ("DW_TAG_volatile_type", "DW_TAG_const_type", "DW_TAG_typedef"):
             next_type = die.attributes.get("DW_AT_type")
-            if not next_type: return None
-            node = self._expand_node(name, addr, self._resolve_type_offset(next_type, cu_off), cu_off, depth + 1)
-            if node and not node.type_name: 
+            if not next_type:
+                return None
+            resolved_type_attr = self._resolve_type_offset(next_type, cu_off)
+            node = self._expand_node(name, addr, resolved_type_attr, cu_off, depth + 1)
+            if node and not node.type_name:
                 node.type_name = type_name
             return node
 
@@ -564,8 +624,13 @@ class ElfExpert:
 
             
         # --- 5. 处理结构体和 C++ 类 ---
-        if die.tag in ("DW_TAG_structure_type", "DW_TAG_class_type"):
+        if die.tag in ("DW_TAG_structure_type", "DW_TAG_class_type", "DW_TAG_union_type"):
+            orig_die = die
             die = self._find_full_type_definition(die, cu_off)
+            # 关键修复：_find_full_type_definition 可能返回不同 CU 的 DIE
+            # 成员的 DW_AT_type 引用相对于成员所在 CU，必须用该 CU 的偏移来解析
+            die_cu_off = self._die_cu_offset(die, cu_off)
+            is_decl = self._is_declaration_die(die)
             name_attr = die.attributes.get("DW_AT_name")
             type_name = name_attr.value.decode("utf-8") if name_attr else type_name
             byte_size = die.attributes.get("DW_AT_byte_size")
@@ -573,33 +638,70 @@ class ElfExpert:
 
             # 关键修复：current_size 必须从 DWARF 读取，不能固定为 0
             struct_node = VariableNode(name, addr, "struct", current_size, type_name or "struct")
+            skipped_members = []
             for child in die.iter_children():
                 if child.tag == "DW_TAG_member":
                     m_name = self._get_attr(child, "DW_AT_name", cu_off)
                     m_loc, m_loc_die, _ = self._get_attr_context(child, "DW_AT_data_member_location", cu_off)
-                    m_type, _, m_type_cu_off = self._get_attr_context(child, "DW_AT_type", cu_off)
+                    # 类型引用必须用 die_cu_off 解析，因为成员 DIE 属于找到的定义所在的 CU
+                    m_type, _, _ = self._get_attr_context(child, "DW_AT_type", die_cu_off)
                     if not (m_name and m_type):
+                        skip_name = self._decode_attr_value(m_name) if m_name else "<no_name>"
+                        skipped_members.append(f"{skip_name}:missing_name_or_type(name={bool(m_name)},type={bool(m_type)})")
                         continue
 
                     declaration_attr = child.attributes.get("DW_AT_declaration")
                     external_attr = child.attributes.get("DW_AT_external")
-                    if (declaration_attr and bool(declaration_attr.value)) or (external_attr and not m_loc):
+                    # C++ 静态成员同时有 DW_AT_external 和 DW_AT_declaration，必须先检查 external
+                    if external_attr and not m_loc:
+                        # C++ 静态成员：尝试从符号表解析地址
+                        static_addr = self._resolve_variable_address(child, die.cu, self.addr_map)
+                        if static_addr is None:
+                            skipped_members.append(f"{self._decode_attr_value(m_name)}:static_no_addr")
+                            continue
+                        member_name = self._decode_attr_value(m_name)
+                        resolved_type_off = self._resolve_type_offset(m_type, die_cu_off)
+                        child_node = self._expand_node(member_name, static_addr, resolved_type_off, die_cu_off, depth + 1)
+                        if child_node:
+                            struct_node.children[member_name] = child_node
+                        else:
+                            skipped_members.append(f"{member_name}:static_expand_failed")
+                        continue
+
+                    # 非静态成员的声明（前向声明），跳过
+                    if declaration_attr and bool(declaration_attr.value):
+                        skipped_members.append(f"{self._decode_attr_value(m_name)}:declaration")
                         continue
 
                     if m_loc:
                         # 解析成员偏移量，兼容 C++ 类成员的表达式形式
                         offset = self._parse_member_offset(m_loc, getattr(m_loc_die, "cu", die.cu))
                         if offset is None:
+                            skipped_members.append(f"{self._decode_attr_value(m_name)}:bad_offset")
                             continue
                     else:
                         # C++ 类第一个非静态成员可能省略位置属性，等价于偏移 0
                         offset = 0
 
                     member_name = self._decode_attr_value(m_name)
-                    child_node = self._expand_node(member_name, addr + offset, self._resolve_type_offset(m_type, m_type_cu_off), m_type_cu_off, depth + 1)
+                    resolved_type_off = self._resolve_type_offset(m_type, die_cu_off)
+                    child_node = self._expand_node(member_name, addr + offset, resolved_type_off, die_cu_off, depth + 1)
                     if child_node:
                         struct_node.children[member_name] = child_node
+                    else:
+                        # 诊断：成员展开失败，记录该成员的类型信息
+                        m_type_die = self._lookup_type_die(die_cu_off, resolved_type_off)
+                        m_type_tag = m_type_die.tag if m_type_die else "NOT_FOUND"
+                        m_type_name_attr = m_type_die.attributes.get("DW_AT_name") if m_type_die else None
+                        m_type_name_str = m_type_name_attr.value.decode("utf-8") if m_type_name_attr else ""
+                        skipped_members.append(f"{member_name}:expand_returned_none(type_tag={m_type_tag},type_name='{m_type_name_str}',attr_form={getattr(m_type,'form','?')},attr_val=0x{m_type.value:x},cu_off=0x{die_cu_off:x},resolved=0x{resolved_type_off:x})")
             return struct_node
+
+        # --- 6. 处理指针类型 ---
+        if die.tag == "DW_TAG_pointer_type":
+            ptr_size = current_size or 4  # ARM32 默认 4 字节
+            display_type = type_name + "*" if type_name else "void*"
+            return VariableNode(name, addr, "int", ptr_size, display_type)
 
         return None
 
@@ -610,31 +712,72 @@ class DebugDataServer:
         self.expert = ElfExpert(self.elf_path)
 
     def list_roots(self) -> list[dict[str, Any]]:
-        return [self.expert.root_vars[name].to_summary(name) for name in sorted(self.expert.root_vars.keys())]
+        """返回根变量列表，不展开子节点（懒加载）"""
+        results = []
+        for name in sorted(self.expert.root_var_info.keys()):
+            addr, _, _ = self.expert.root_var_info[name]
+            # 优化#2：直接读取预计算的类型信息，不再每次做类型查找
+            cached = self.expert.root_var_cache.get(name, {})
+            type_name = cached.get("type_name", "")
+            size = cached.get("size", 0)
+            has_children = cached.get("has_children", False)
+            results.append({
+                "name": name,
+                "path": name,
+                "address": hex(addr),
+                "type": "struct" if has_children else "value",
+                "typeName": type_name,
+                "size": size,
+                "hasChildren": has_children,
+                "children": [],
+            })
+        return results
 
     def resolve_path(self, path: str) -> VariableNode | None:
+        """解析变量路径，支持懒加载展开（包括 C++ 类类型）"""
         if not path:
             return None
 
-        # 1. 规范化路径：将 "a[0].b" 变为 "a.[0].b"
-        # 这样我们可以统一使用 "." 作为分隔符，而不破坏 "[0]" 这种 key
         norm_path = path.replace("[", ".[")
         parts = [p for p in norm_path.split(".") if p]
-
         if not parts:
             return None
 
-        # 2. 从根变量开始查找
-        current_node = self.expert.root_vars.get(parts[0])
-        
-        # 3. 逐层深入
+        root_name = parts[0]
+
+        # 确保根节点已展开（懒加载）
+        if root_name not in self.expert.root_vars:
+            if root_name in self.expert.root_var_info:
+                addr, type_off, cu_off = self.expert.root_var_info[root_name]
+                node = self.expert._expand_node(root_name, addr, type_off, cu_off, 0)
+                if node:
+                    self.expert.root_vars[root_name] = node
+            else:
+                # C++ 类/结构体可能没有 DW_TAG_variable，尝试从类型定义展开
+                class_node = self._try_expand_class_type(root_name)
+                if class_node:
+                    self.expert.root_vars[root_name] = class_node
+
+        current = self.expert.root_vars.get(root_name)
         for part in parts[1:]:
-            if not current_node:
+            if not current:
                 return None
-            # 尝试在当前节点的 children 中查找下一级
-            current_node = current_node.children.get(part)
-            
-        return current_node
+            current = current.children.get(part)
+
+        return current
+
+    def _try_expand_class_type(self, type_name: str) -> VariableNode | None:
+        """尝试将类/结构体类型名展开为虚拟根节点（用于 C++ 静态成员类）"""
+        tdm = getattr(self.expert, "type_definition_map", {})
+        # 尝试 class_type 和 structure_type 两种 tag
+        for tag in ("DW_TAG_class_type", "DW_TAG_structure_type", "DW_TAG_union_type"):
+            die = tdm.get((tag, type_name))
+            if die:
+                die_cu_off = self.expert._die_cu_offset(die, 0)
+                node = self.expert._expand_node(type_name, 0, die.offset, die_cu_off, 0)
+                if node and node.children:
+                    return node
+        return None
 
     def describe(self, path: str) -> dict[str, Any] | None:
         node = self.resolve_path(path)
@@ -642,21 +785,14 @@ class DebugDataServer:
 
     def list_children(self, path: str) -> list[dict[str, Any]] | None:
         node = self.resolve_path(path)
-        
-        # 1. 如果找不到节点，返回 None
         if not node:
             return None
-            
-        # 2. 如果节点没有子元素，安全返回空列表
         if not node.children:
             return []
-
-        # 3. 直接按照原本插入字典的物理顺序返回（取消所有额外排序）
         results = []
         for name, child in node.children.items():
             child_path = f"{path}{'' if name.startswith('[') else '.'}{name}"
             results.append(child.to_summary(child_path))
-            
         return results
 
     def read_paths(self, paths: list[str]) -> list[dict[str, Any]]:
@@ -678,7 +814,7 @@ class DebugDataServer:
                 raw_bytes = self.rpc.read_raw_bytes(node.addr, 8) 
                 if len(raw_bytes) == 8:
                     if node.type == "double":
-                        val = struct.unpack("<d", raw_bytes)[0]
+                        val = round(struct.unpack("<d", raw_bytes)[0], 4)
                     else:
                         # 判定是否有符号：<Q 是无符号 64 位，<q 是有符号 64 位
                         is_unsigned = "unsigned" in node.type_name.lower() or "uint" in node.type_name.lower()
@@ -689,7 +825,9 @@ class DebugDataServer:
                     val = "ERR"
                 results.append({"path": path, "value": val, "address": hex(node.addr)})
 
-            elif node.type != "struct":
+            elif node.type == "struct":
+                results.append({"path": path, "value": "{...}", "address": hex(node.addr)})
+            else:
                 normal_nodes.append((path, node))
         
         # 普通变量继续使用原来的批量读取优化
@@ -738,8 +876,6 @@ class DebugDataServer:
         return {"ok": False, "error": f"Unknown command: {command}"}
 
 
-import sys
-
 def serve_stdio(server: DebugDataServer) -> int:
     while True:
         try:
@@ -766,5 +902,16 @@ def parse_args() -> argparse.Namespace:
 
 if __name__ == "__main__":
     args = parse_args()
-    server = DebugDataServer(elf_path=args.elf, host=args.host, port=args.port)
+    sys.stderr.write(f"server.py starting, elf={args.elf}\n")
+    sys.stderr.flush()
+    try:
+        server = DebugDataServer(elf_path=args.elf, host=args.host, port=args.port)
+        sys.stderr.write(f"ELF loaded, {len(server.expert.root_var_info)} root vars (lazy)\n")
+        sys.stderr.flush()
+    except Exception as e:
+        import traceback
+        sys.stderr.write(f"Failed to initialize: {e}\n")
+        sys.stderr.write(traceback.format_exc())
+        sys.stderr.flush()
+        raise SystemExit(1)
     raise SystemExit(serve_stdio(server))

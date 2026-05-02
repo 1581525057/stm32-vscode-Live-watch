@@ -16,3 +16,12 @@ out/*.test.js.map
 tsconfig.json
 build_server.py
 copy-server.js
+.superpowers/**
+docs/**
+
+# PyInstaller 构建产物（只需要 out/bin/ 下的 exe）
+resources/build/**
+resources/dist/**
+
+# 源 exe 已复制到 out/bin/，bin/ 目录不需要进入 VSIX
+bin/**
