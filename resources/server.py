@@ -5,12 +5,13 @@ import struct
 import sys
 import threading
 import math
+import time
 from pathlib import Path
 from typing import Any
-import re
 
 from elftools.elf.elffile import ELFFile
 from elftools.dwarf.dwarf_expr import DWARFExprParser
+from elftools.dwarf.locationlists import LocationExpr
 
 
 class VariableNode:
@@ -64,7 +65,10 @@ class TclRpcClient:
             try:
                 self.sock.sendall(cmd.encode("ascii") + b"\x1a")
                 chunks = []
+                start_time = time.monotonic()
                 while True:
+                    if time.monotonic() - start_time > 5.0:
+                        raise ConnectionError("OpenOCD response timeout (5s)")
                     chunk = self.sock.recv(16384)
                     if not chunk:
                         break
@@ -72,6 +76,9 @@ class TclRpcClient:
                     if b"\x1a" in chunk:
                         break
                 return b"".join(chunks).decode("ascii", errors="ignore").strip("\x1a")
+            except ConnectionError:
+                self._connect()
+                return ""
             except Exception:
                 self._connect()
                 return ""
@@ -83,37 +90,38 @@ class TclRpcClient:
         indexed_nodes = list(enumerate(nodes))
         sorted_indexed = sorted(indexed_nodes, key=lambda x: x[1].addr)
         results_list: list[Any] = [None] * len(nodes)
+        MAX_MERGE_SIZE = 256  # 单次 mdb 读取上限，避免超大请求
         i = 0
         while i < len(sorted_indexed):
-            start_node = sorted_indexed[i][1]
-            # 问题1修复：只合并 size==4 的连续 4 字节节点
-            count = 1
-            if start_node.size == 4:
-                while i + count < len(sorted_indexed):
-                    next_node = sorted_indexed[i + count][1]
-                    if next_node.size != 4 or next_node.addr != start_node.addr + count * 4:
-                        break
-                    count += 1
+            # 合并连续节点，限制总大小
+            group = [sorted_indexed[i]]
+            group_end = sorted_indexed[i][1].addr + sorted_indexed[i][1].size
+            j = i + 1
+            while j < len(sorted_indexed):
+                next_node = sorted_indexed[j][1]
+                if next_node.addr == group_end and (group_end - sorted_indexed[i][1].addr + next_node.size) <= MAX_MERGE_SIZE:
+                    group.append(sorted_indexed[j])
+                    group_end = next_node.addr + next_node.size
+                    j += 1
+                else:
+                    break
 
-            raw_res = self._send_rpc(f'capture "mdw {hex(start_node.addr)} {count}"')
+            # 读取原始字节
+            start_addr = group[0][1].addr
+            total_size = group_end - start_addr
+            raw_bytes = self.read_raw_bytes(start_addr, total_size)
 
-            # 健壮的多行数据解析逻辑
-            values = []
-            for line in raw_res.splitlines():
-                if ':' in line:
-                    line = line.split(':', 1)[1]
-                for token in line.split():
-                    if all(c in "0123456789abcdefABCDEF" for c in token):
-                        values.append(token)
-
-            for j in range(count):
-                orig_idx, curr_node = sorted_indexed[i + j]
-                if j < len(values):
-                    raw_int = int(values[j], 16)
-                    results_list[orig_idx] = self._parse_raw_value(raw_int, curr_node)
+            # 从原始字节缓冲区中按各节点的 size 解析值
+            for orig_idx, node in group:
+                offset = node.addr - start_addr
+                if offset + node.size <= len(raw_bytes):
+                    node_bytes = raw_bytes[offset:offset + node.size]
+                    raw_int = int.from_bytes(node_bytes, byteorder='little')
+                    results_list[orig_idx] = self._parse_raw_value(raw_int, node)
                 else:
                     results_list[orig_idx] = "N/A"
-            i += count
+
+            i += len(group)
 
         return [r if r is not None else "N/A" for r in results_list]
 
@@ -134,25 +142,8 @@ class TclRpcClient:
 
     def read_memory_bytes(self, addr: int, size: int) -> str:
         """使用 mdb 读取指定长度的内存并转为字符串"""
-        # mdb 指令返回格式通常为: 0x2000002c: 42 61 74 74 65 72 79 00 ...
-        raw_res = self._send_rpc(f'capture "mdb {hex(addr)} {size}"')
-        
         try:
-            # 提取十六进制部分
-            # 过滤掉地址前缀（带冒号的部分）
-            hex_tokens = []
-            for line in raw_res.splitlines():
-                parts = line.split(':')
-                if len(parts) > 1:
-                    # 拿到冒号后面的十六进制字节
-                    tokens = parts[1].split()
-                    for t in tokens:
-                        if len(t) == 2 and all(c in "0123456789abcdefABCDEF" for c in t):
-                            hex_tokens.append(t)
-            
-            # 转为字节流
-            byte_data = bytes([int(h, 16) for h in hex_tokens[:size]])
-            # 遇到 \x00 截断，并解码
+            byte_data = self.read_raw_bytes(addr, size)
             return byte_data.split(b'\x00')[0].decode('ascii', errors='ignore')
         except Exception:
             return "Decode Error"
@@ -214,16 +205,21 @@ class TclRpcClient:
             # --- 1. 处理字符串写入 (char 数组) ---
             if node.type == "string":
                 # 将输入字符串转为 ASCII 字节，确保不超过数组定义的 size
-                # 我们最多写入 node.size 个字节
                 encoded = val.encode("ascii", errors="ignore")[:node.size]
-                
-                # 逐字节写入内存
-                for i, b in enumerate(encoded):
-                    self._send_rpc(f"mwb {hex(node.addr + i)} {hex(b)}")
-                
-                # 如果字符串没填满数组，在末尾补一个 \0 字符（C 语言字符串结束标志）
+                # 如果字符串没填满数组，在末尾补一个 \0 字符
                 if len(encoded) < node.size:
-                    self._send_rpc(f"mwb {hex(node.addr + len(encoded))} 0")
+                    encoded += b"\x00"
+
+                # 批量写入：每 4 字节用一次 mww，尾部不足 4 字节用 mwb
+                addr = node.addr
+                pos = 0
+                while pos + 4 <= len(encoded):
+                    word = int.from_bytes(encoded[pos:pos + 4], byteorder='little')
+                    self._send_rpc(f"mww {hex(addr + pos)} {hex(word)}")
+                    pos += 4
+                while pos < len(encoded):
+                    self._send_rpc(f"mwb {hex(addr + pos)} {hex(encoded[pos])}")
+                    pos += 1
                 return True
 
             # --- 2. 处理 8 字节数据 (Double / Int64) ---
@@ -259,12 +255,14 @@ class TclRpcClient:
 
 class ElfExpert:
     def __init__(self, path: str):
+        self.verbose = False
         self.root_vars: dict[str, VariableNode] = {}
         # 记录根变量的基本信息，用于按需展开（懒加载）
         self.root_var_info: dict[str, tuple[int, int, int]] = {}  # name -> (addr, type_off, cu_off)
         # 优化#2：预计算的根变量类型信息缓存
         self.root_var_cache: dict[str, dict[str, Any]] = {}  # name -> {type_name, size, has_children}
         self.type_die_map: dict[tuple[int, int], Any] = {}
+        self.type_abs_offset_map: dict[int, Any] = {}  # die.offset -> die，用于快速绝对偏移查找
         self.type_off_to_cu: dict[int, int] = {}  # 优化#1：反向索引，type_off -> 第一个 cu_off
         self.type_definition_map: dict[tuple[Any, ...], Any] = {}
         with open(path, "rb") as file:
@@ -279,6 +277,7 @@ class ElfExpert:
                 for die in cu.iter_DIEs():
                     if die.tag:
                         self.type_die_map[(cu.cu_offset, die.offset)] = die
+                        self.type_abs_offset_map[die.offset] = die
                         self.type_off_to_cu.setdefault(die.offset, cu.cu_offset)
                         self._register_type_definition(cu.cu_offset, die)
                     if die.tag == "DW_TAG_variable":
@@ -290,7 +289,14 @@ class ElfExpert:
                         addr = self._resolve_variable_address(die, cu, self.addr_map)
                         if addr is None:
                             continue
-                        type_off = self._resolve_type_offset(type_attr, type_cu_off)
+                        # 使用 pyelftools 内置方法解析类型引用（AC5 跨 CU 兼容）
+                        # 仅在变量收集阶段使用，展开路径仍用旧的手动偏移计算
+                        type_ref = self._resolve_type_ref(die)
+                        if type_ref:
+                            type_die_obj, type_cu_off = type_ref
+                            type_off = type_die_obj.offset
+                        else:
+                            type_off = self._resolve_type_offset(type_attr, type_cu_off)
                         self.root_var_info[name] = (addr, type_off, type_cu_off)
             # 优化#2：预计算每个根变量的类型信息，避免 list_roots 重复查找
             for name, (addr, type_off, cu_off) in self.root_var_info.items():
@@ -424,20 +430,83 @@ class ElfExpert:
             return type_attr.value
         return type_attr.value + cu_off
 
+    def _resolve_type_ref(self, die: Any, attr_name: str = "DW_AT_type") -> tuple[Any, int] | None:
+        """解析类型引用，优先用 pyelftools 内置方法（AC5 跨 CU 兼容），失败时回退到手动偏移计算
+        返回 (type_die, type_cu_off) 或 None
+        仅用于变量收集阶段，不用于 _expand_node 等展开路径"""
+        attr = die.attributes.get(attr_name)
+        if not attr:
+            return None
+        # 优先使用 pyelftools 内置方法（AC5/AC6 兼容）
+        try:
+            type_die = die.get_DIE_from_attribute(attr_name)
+            if type_die:
+                type_cu_off = getattr(getattr(type_die, 'cu', None), 'cu_offset', 0)
+                return (type_die, type_cu_off)
+        except Exception:
+            pass
+        # 回退：手动计算偏移 + _lookup_type_die（兼容 C++ 跨 CU 引用等边缘情况）
+        cu_off = getattr(getattr(die, 'cu', None), 'cu_offset', 0)
+        type_off = self._resolve_type_offset(attr, cu_off)
+        type_die = self._lookup_type_die(cu_off, type_off)
+        if type_die:
+            type_cu_off = getattr(getattr(type_die, 'cu', None), 'cu_offset', cu_off)
+            return (type_die, type_cu_off)
+        return None
+
     def _lookup_type_die(self, cu_off: int, type_off: int) -> Any:
-        # 优化#1：精确查找 O(1)，失败后通过反向索引 O(1) 定位 cu_off
+        """查找类型 DIE，兼容 AC5/AC6 的 DWARF 偏移编码差异"""
+        # 精确查找 (cu_off, type_off)
         die = self.type_die_map.get((cu_off, type_off))
         if die:
             return die
+        # 通过反向索引查找
         candidate_cu = self.type_off_to_cu.get(type_off)
         if candidate_cu is not None:
-            return self.type_die_map.get((candidate_cu, type_off))
+            die = self.type_die_map.get((candidate_cu, type_off))
+            if die:
+                return die
+        # AC5 fallback：type_off 可能是 CU 相对偏移（未加 cu_off）或绝对偏移
+        # 尝试 type_off + cu_off（CU 相对 → 绝对）
+        abs_off = type_off + cu_off
+        die = self.type_die_map.get((cu_off, abs_off))
+        if die:
+            return die
+        # 通过绝对偏移索引快速查找
+        die = self.type_abs_offset_map.get(type_off)
+        if die:
+            return die
+        if self.verbose:
+            sys.stderr.write(f"[LOOKUP-FAIL] cu_off={cu_off:#x}, type_off={type_off:#x}, abs_off={abs_off:#x}\n")
+            sys.stderr.write(f"  candidate_cu={candidate_cu}\n")
+            sys.stderr.flush()
         return None
 
     def _parse_location_address(self, expr: Any, cu: Any) -> int | None:
         if expr is None:
             return None
         try:
+            # pyelftools 可能用 LocationExpr 包装，提取原始字节
+            if isinstance(expr, LocationExpr):
+                expr = expr.loc_expr
+            if isinstance(expr, int):
+                # AC5 可能用 DW_FORM_data4/data8 存储 .debug_loc 偏移
+                # 尝试从 location lists 解析
+                if self.verbose:
+                    sys.stderr.write(f"[LOC] expr is int (offset={expr:#x}), trying location_lists\n")
+                    sys.stderr.flush()
+                try:
+                    loc_lists = cu.dwarfinfo.location_lists()
+                    loc_list = loc_lists.get_location_list_at_offset(expr, cu)
+                    if loc_list:
+                        for entry in loc_list:
+                            if hasattr(entry, 'loc_expr') and entry.loc_expr:
+                                ops = DWARFExprParser(cu.structs).parse_expr(entry.loc_expr)
+                                if ops and ops[0].op_name == "DW_OP_addr" and ops[0].args:
+                                    return int(ops[0].args[0])
+                except Exception:
+                    pass
+                return None
             expr_bytes = expr if isinstance(expr, bytes) else bytes(expr)
             ops = DWARFExprParser(cu.structs).parse_expr(expr_bytes)
             if not ops:
@@ -706,10 +775,11 @@ class ElfExpert:
         return None
 
 class DebugDataServer:
-    def __init__(self, elf_path: str, host: str, port: int):
+    def __init__(self, elf_path: str, host: str, port: int, verbose: bool = False):
         self.elf_path = str(Path(elf_path))
         self.rpc = TclRpcClient(host=host, port=port)
         self.expert = ElfExpert(self.elf_path)
+        self.expert.verbose = verbose
 
     def list_roots(self) -> list[dict[str, Any]]:
         """返回根变量列表，不展开子节点（懒加载）"""
@@ -795,6 +865,33 @@ class DebugDataServer:
             results.append(child.to_summary(child_path))
         return results
 
+    def _dump_all_dwarf_vars(self) -> list[dict[str, Any]]:
+        """诊断：列出 ELF 中所有 DW_TAG_variable 条目的详细信息"""
+        results = []
+        with open(self.elf_path, "rb") as f:
+            elffile = ELFFile(f)
+            dwarf = elffile.get_dwarf_info()
+            for cu in dwarf.iter_CUs():
+                for die in cu.iter_DIEs():
+                    if die.tag != "DW_TAG_variable":
+                        continue
+                    name_attr = die.attributes.get("DW_AT_name")
+                    name = self.expert._decode_attr_value(name_attr) if name_attr else "<no_name>"
+                    type_attr = die.attributes.get("DW_AT_type")
+                    loc_attr = die.attributes.get("DW_AT_location")
+                    loc_form = getattr(loc_attr, 'form', None) if loc_attr else None
+                    loc_type = type(loc_attr.value).__name__ if loc_attr else None
+                    in_root = name in self.expert.root_var_info
+                    results.append({
+                        "name": name,
+                        "has_type": type_attr is not None,
+                        "has_loc": loc_attr is not None,
+                        "loc_form": str(loc_form),
+                        "loc_value_type": loc_type,
+                        "in_root_vars": in_root,
+                    })
+        return results
+
     def read_paths(self, paths: list[str]) -> list[dict[str, Any]]:
         results = []
         # 分离普通变量和字符串变量
@@ -839,8 +936,17 @@ class DebugDataServer:
                 if node.type == "enum" and isinstance(value, int) and value in node.enum_values:
                     value = f"{value}/{node.enum_values[value]}"
                 results.append({"path": path, "value": value, "address": hex(node.addr)})
-                
-        return results
+
+        # 按输入 paths 顺序排列结果（保留重复路径）
+        result_map: dict[str, list[dict[str, Any]]] = {}
+        for r in results:
+            result_map.setdefault(r["path"], []).append(r)
+        ordered: list[dict[str, Any]] = []
+        for p in paths:
+            bucket = result_map.get(p)
+            if bucket:
+                ordered.append(bucket.pop(0))
+        return ordered
         
     def write_value(self, path: str, value: str) -> bool:
         node = self.resolve_path(path)
@@ -850,6 +956,9 @@ class DebugDataServer:
         command = request.get("command")
         if command == "ping":
             return {"ok": True, "result": {"message": "pong"}}
+        if command == "list_all_dwarf_vars":
+            # 诊断命令：列出 ELF 中所有 DW_TAG_variable 条目
+            return {"ok": True, "result": self._dump_all_dwarf_vars()}
         if command == "list_roots":
             return {"ok": True, "result": self.list_roots()}
         if command == "describe":
@@ -897,6 +1006,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--elf", required=True, help="Path to ELF file")
     parser.add_argument("--host", default="127.0.0.1", help="OpenOCD TCL RPC host")
     parser.add_argument("--port", type=int, default=50001, help="OpenOCD TCL RPC port")
+    parser.add_argument("--verbose", action="store_true", help="Enable diagnostic logging")
     return parser.parse_args()
 
 
@@ -905,7 +1015,7 @@ if __name__ == "__main__":
     sys.stderr.write(f"server.py starting, elf={args.elf}\n")
     sys.stderr.flush()
     try:
-        server = DebugDataServer(elf_path=args.elf, host=args.host, port=args.port)
+        server = DebugDataServer(elf_path=args.elf, host=args.host, port=args.port, verbose=args.verbose)
         sys.stderr.write(f"ELF loaded, {len(server.expert.root_var_info)} root vars (lazy)\n")
         sys.stderr.flush()
     except Exception as e:

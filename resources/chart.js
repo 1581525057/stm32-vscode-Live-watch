@@ -271,7 +271,7 @@
 
     // 完整重建图例 DOM（仅在添加/删除变量时调用）
     function renderLegend() {
-        legendEl.innerHTML = '';
+        while (legendEl.firstChild) legendEl.removeChild(legendEl.firstChild);
         chart.data.datasets.forEach(function (ds) {
             var item = document.createElement('span');
             item.className = 'legend-item';
@@ -377,6 +377,7 @@
         var windowMs = timeWindow * 1000;
         var cutoff = elapsed - windowMs;
         var trimmed = false;
+        var added = false;
 
         points.forEach(function (point) {
             var info = datasets.get(point.path);
@@ -385,6 +386,7 @@
             var ds = chart.data.datasets[info.index];
             var v = point.value;
             ds.data.push({ x: elapsed, y: v });
+            added = true;
 
             // 增量更新 Y 轴范围
             if (v < yMin) yMin = v;
@@ -399,6 +401,9 @@
                 }
             }
         });
+
+        // 无有效数据点时跳过图表更新
+        if (!added) return;
 
         // 裁剪后延迟重算 Y 轴范围（避免每次 250ms 都全量扫描）
         // 增量追踪已覆盖新数据，这里只处理被驱逐的极值点

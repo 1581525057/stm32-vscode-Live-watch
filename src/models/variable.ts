@@ -14,9 +14,6 @@ export interface ReadResult {
     path: string;
     value: any;
     address: string;
-    type: string;
-    typeName: string;
-    size: number;
 }
 
 export interface ServerResponse {

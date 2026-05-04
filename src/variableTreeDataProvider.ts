@@ -216,6 +216,12 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
             // 排序：移动根变量
             this.moveRootVariable(dragData.sourceIndex, targetIndex);
         } else {
+            // 禁止将结构体/数组容器提取为根变量
+            const draggedInfo = this.allVariables.get(dragData.path);
+            if (draggedInfo && draggedInfo.hasChildren) {
+                vscode.window.showInformationMessage('Cannot extract struct/array as root variable');
+                return;
+            }
             // 提取：将子成员添加为新的根变量
             await this.extractAsRootVariable(dragData.path, targetIndex);
         }
@@ -362,6 +368,7 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
         this.rootVariables = [];
         this.allVariables.clear();
         this.valueCache.clear();
+        this.childrenCache.clear();
 
         // 并行调用 describe，避免串行等待多个 RPC 请求
         const results = await Promise.allSettled(
@@ -504,12 +511,15 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
 
         this.rootVariables = this.rootVariables.filter(variable => variable.path !== item.variableInfo.path);
 
-        // 清除子节点缓存
-        this.childrenCache.delete(item.variableInfo.path);
+        // 清除子节点缓存：精确匹配路径或匹配子路径
+        for (const key of this.childrenCache.keys()) {
+            if (key === item.variableInfo.path || key.startsWith(item.variableInfo.path + '.') || key.startsWith(item.variableInfo.path + '[')) {
+                this.childrenCache.delete(key);
+            }
+        }
 
-        // 【关键修复 2】：删除根节点时，通过重建来彻底清除它包含的所有子节点缓存
-        this.rebuildVariableIndex(); 
-        
+        this.rebuildVariableIndex();
+
         // 清理值缓存：精确匹配路径或匹配子路径（以 '.' 或 '[' 分隔）
         for (const key of this.valueCache.keys()) {
             if (key === item.variableInfo.path || key.startsWith(item.variableInfo.path + '.') || key.startsWith(item.variableInfo.path + '[')) {

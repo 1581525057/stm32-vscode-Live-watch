@@ -91,6 +91,32 @@ export function activate(context: vscode.ExtensionContext) {
         variableTreeDataProvider.clearValueCache();
     });
 
+    const dumpDwarfVarsCommand = vscode.commands.registerCommand('stm32-live-watch.dumpDwarfVars', async () => {
+        if (!serverClient.isRunning()) {
+            vscode.window.showErrorMessage('Server not running. Start a debug session first.');
+            return;
+        }
+        try {
+            const vars = await serverClient.dumpDwarfVars();
+            const output = vscode.window.createOutputChannel('STM32 Live Watch - DWARF Vars');
+            output.clear();
+            output.appendLine(`=== ELF DWARF Variables (${vars.length} total) ===\n`);
+            const collected = vars.filter((v: any) => v.in_root_vars);
+            const skipped = vars.filter((v: any) => !v.in_root_vars);
+            output.appendLine(`--- Collected (${collected.length}) ---`);
+            for (const v of collected) {
+                output.appendLine(`  ${v.name}  type=${v.has_type}  loc=${v.has_loc}(${v.loc_form})`);
+            }
+            output.appendLine(`\n--- SKIPPED (${skipped.length}) ---`);
+            for (const v of skipped) {
+                output.appendLine(`  ${v.name}  type=${v.has_type}  loc=${v.has_loc}(${v.loc_form}, ${v.loc_value_type})`);
+            }
+            output.show();
+        } catch (error) {
+            vscode.window.showErrorMessage(`Failed to dump DWARF vars: ${error}`);
+        }
+    });
+
     const addVariableCommand = vscode.commands.registerCommand('stm32-live-watch.addVariable', async () => {
         const input = await vscode.window.showInputBox({
             placeHolder: 'Enter variable name (e.g., counter, myStruct.value)',
@@ -219,6 +245,7 @@ export function activate(context: vscode.ExtensionContext) {
         generateElfCommand,
         configureElfPathCommand,
         refreshVariablesCommand,
+        dumpDwarfVarsCommand,
         addVariableCommand,
         addSelectedVariableCommand,
         editVariableCommand,
@@ -250,7 +277,7 @@ function resolveServerScriptPath(extensionPath: string): string {
         }
     }
 
-    return candidates[0] ?? 'server.py';
+    return path.join(extensionPath, 'server.py');
 }
 
 function getSelectedVariableItem(
@@ -311,7 +338,7 @@ async function ensureServerRunning(showSuccessMessage: boolean): Promise<void> {
         const config = getLiveWatchConfig();
         const host = getConfigValue<string>('openocdHost', '127.0.0.1');
         const port = getConfigValue<number>('openocdPort', 50001);
-        const elfResult = await resolveElfPath(config);
+        const elfResult = await resolveElfPath();
         const elfPath = elfResult.elfPath;
 
         if (!elfPath) {
@@ -324,8 +351,20 @@ async function ensureServerRunning(showSuccessMessage: boolean): Promise<void> {
         await applyResolvedElfPath(config, elfResult);
 
         await serverClient.start(elfPath, host, port);
-        await new Promise(resolve => setTimeout(resolve, 500));
-        await serverClient.ping();
+        // 重试 ping 直到服务器就绪，而非固定等待 500ms
+        let pingSuccess = false;
+        for (let i = 0; i < 5; i++) {
+            try {
+                await serverClient.ping();
+                pingSuccess = true;
+                break;
+            } catch {
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+        }
+        if (!pingSuccess) {
+            throw new Error('Server failed to respond to ping after 5 attempts');
+        }
         await variableTreeDataProvider.loadRootVariables();
 
         if (showSuccessMessage) {
@@ -340,9 +379,13 @@ async function ensureServerRunning(showSuccessMessage: boolean): Promise<void> {
         throw e;
     }
     autoStartInProgress = undefined;
+    // 确认服务器确实已启动，防止竞态条件
+    if (!serverClient.isRunning()) {
+        throw new Error('Server failed to start');
+    }
 }
 
-async function resolveElfPath(config: vscode.WorkspaceConfiguration): Promise<ResolveElfResult> {
+async function resolveElfPath(): Promise<ResolveElfResult> {
     return resolveElfPathWithAxf({
         configuredElfPath: getConfigValue<string>('elfPath', ''),
         configuredFromelfPath: getConfigValue<string>('fromelfPath', ''),

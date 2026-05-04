@@ -2,8 +2,8 @@
 
 **中文** | [English](README_EN.md)
 
-发布者：yezi  
-版本：3.3.0  
+发布者：ciyueYe  
+版本：3.5.0  
 适用场景：VS Code + EIDE + Cortex-Debug + OpenOCD 的 STM32 实时变量观察与图表可视化
 
 `stm32-vscode-Live-watch` 是一个面向 STM32 调试阶段的 VS Code 扩展。它不会替代调试器，而是在现有 EIDE、Cortex-Debug、OpenOCD 工作流旁边增加一个更直接的实时变量观察界面：你编译工程、启动调试、添加变量，扩展负责从 ELF 调试信息里解析变量地址，并通过 OpenOCD 读取目标板内存。
@@ -51,6 +51,22 @@
 - 图例值更新改用缓存 DOM 引用，消除每 250ms 的 `querySelectorAll` 开销。
 - 变量树 `listChildren` 结果缓存，展开节点不再每 250ms 重复 RPC 调用。
 - 网络接收缓冲区优化，解决大响应时的 O(n²) 内存分配问题。
+
+3.5.0 AC5/AC6 双编译器兼容、性能优化与 Bug 修复：
+
+- **AC5 编译器兼容**：新增 `pyelftools` 内置方法解析 DWARF 类型引用，ARM Compiler 5 编译的固件（133+ CU）现在可正确解析全局变量。
+- **C++ extern 类实例兼容**：保留手动偏移计算用于 `DW_AT_specification` 链解析，确保 `extern` 类实例（如 `chassis_motor`）正确可见。
+- **ELF 路径自动识别增强**：支持 EIDE AXF 自动转换 ELF，新增 `fromelf.exe` 自动定位。
+- **批量读取优化**：合并连续内存节点为单次 `mdb` 请求，限制单次读取上限 256 字节，减少 OpenOCD 通信开销。
+- **OpenOCD 超时保护**：`_send_rpc` 新增 5 秒整体超时，防止 OpenOCD 无响应导致永久挂起。
+- **请求超时保护**：`serverClient.ts` 每个请求新增 10 秒超时，防止 Promise 永久挂起。
+- **图表采集超时修复**：修复 `collectData` 超时后 `readPaths` Promise 未处理导致的 unhandled rejection。
+- **进程通信健壮性**：`processBuffer` 不再因非 JSON 诊断输出而误拒活跃请求。
+- **read_paths 重复路径支持**：修复同一路径多次出现时结果丢失的问题。
+- **字符串写入优化**：批量使用 `mww` 替代逐字节 `mwb`，写入速度提升约 4 倍。
+- **代码去重**：`read_memory_bytes` 复用 `read_raw_bytes`，消除重复的十六进制解析逻辑。
+- **LocationExpr 支持**：`_parse_location_address` 新增 `LocationExpr` 包装和 `.debug_loc` 位置列表解析，兼容 AC5 DWARF 编码。
+- **诊断命令**：新增 `Dump DWARF Variables` 命令和 `--verbose` 启动参数，便于排查变量解析问题。
 
 ## 它解决什么问题
 
@@ -535,8 +551,8 @@ stm32-vscode-Live-watch/
 ## 发布信息
 
 - 扩展名：`stm32-vscode-Live-watch`
-- 发布者：`yezi`
-- 版本：`3.3.0`
+- 发布者：`ciyueYe`
+- 版本：`3.5.0`
 - 仓库：<https://github.com/1581525057/stm32-vscode-Live-watch>
 
 ## 致谢

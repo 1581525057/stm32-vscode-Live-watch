@@ -109,7 +109,7 @@ export class ServerClient {
                 this.process = null;
             });
 
-            setTimeout(() => resolve(), 100);
+            setTimeout(() => resolve(), 50);
         });
     }
 
@@ -133,13 +133,14 @@ export class ServerClient {
                         pending.reject(new Error(response.error));
                     }
                 }
+                // 后续行可能是服务器诊断输出，跳过
             } catch (error) {
-                console.error('Failed to parse response:', line, error);
-                // 解析失败时也要释放 activeRequest，防止永久阻塞
+                // 非 JSON 行（服务器诊断日志），静默跳过
+                // 只有当有活跃请求且该行看起来像错误时才释放
                 const pending = this.activeRequest;
-                if (pending) {
+                if (pending && line.includes('Error')) {
                     this.activeRequest = null;
-                    pending.reject(new Error(`Invalid response from server: ${line.substring(0, 100)}`));
+                    pending.reject(new Error(`Server error: ${line.substring(0, 100)}`));
                 }
             }
         }
@@ -157,18 +158,35 @@ export class ServerClient {
                 return;
             }
 
+            // 每个请求设置 10 秒超时，防止永久挂起
+            const timeout = setTimeout(() => {
+                if (this.activeRequest) {
+                    this.activeRequest = null;
+                    reject(new Error(`Request '${command}' timed out after 10s`));
+                }
+            }, 10000);
+
             const request = JSON.stringify({ command, ...params });
-            this.activeRequest = { resolve, reject };
+            this.activeRequest = {
+                resolve: (v: any) => { clearTimeout(timeout); resolve(v); },
+                reject: (e: any) => { clearTimeout(timeout); reject(e); }
+            };
             this.process.stdin.write(request + '\n');
         });
 
         const queuedRequest = this.requestQueue.then(runRequest, runRequest);
-        this.requestQueue = queuedRequest.catch(() => undefined);
+        this.requestQueue = queuedRequest.catch((err) => {
+            console.error('Request queue error:', err);
+        });
         return queuedRequest;
     }
 
     async ping(): Promise<any> {
         return this.sendRequest('ping');
+    }
+
+    async dumpDwarfVars(): Promise<any> {
+        return this.sendRequest('list_all_dwarf_vars');
     }
 
     async listRoots(): Promise<VariableInfo[]> {

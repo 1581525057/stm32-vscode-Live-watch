@@ -2,6 +2,7 @@
 // 图表数据管理器：变量列表、独立定时器、Webview 通信
 
 import * as vscode from 'vscode';
+import { getConfigValue } from './config';
 import { ServerClient } from './serverClient';
 import { ChartViewProvider } from './chartPanel';
 
@@ -26,7 +27,7 @@ export class ChartManager {
         private serverClient: ServerClient,
         private workspaceState: vscode.Memento
     ) {
-        this.collectInterval = vscode.workspace.getConfiguration('stm32LiveWatch').get<number>('chartRefreshInterval', 100);
+        this.collectInterval = getConfigValue<number>('chartRefreshInterval', 100);
     }
 
     public attachWebview(provider: ChartViewProvider): void {
@@ -68,6 +69,7 @@ export class ChartManager {
 
     public removeVariable(path: string): void {
         this.chartVariables = this.chartVariables.filter(p => p !== path);
+        this.colorMap.delete(path);
         void this.persistVariables();
 
         if (this.chartVariables.length === 0) {
@@ -178,7 +180,16 @@ export class ChartManager {
         this.isCollecting = true;
 
         try {
-            const results = await this.serverClient.readPaths(this.chartVariables);
+            // 5 秒超时，防止数据采集请求永久挂起
+            let timeoutId: ReturnType<typeof setTimeout>;
+            let timedOut = false;
+            const timeoutPromise = new Promise<never>((_, reject) => {
+                timeoutId = setTimeout(() => { timedOut = true; reject(new Error('collectData timeout')); }, 5000);
+            });
+            const readPathsPromise = this.serverClient.readPaths(this.chartVariables)
+                .then(r => { clearTimeout(timeoutId!); return r; })
+                .catch(err => { clearTimeout(timeoutId!); if (!timedOut) { throw err; } return []; });
+            const results = await Promise.race([readPathsPromise, timeoutPromise]);
             const data = results.map(r => ({
                 path: r.path,
                 value: typeof r.value === 'number' ? r.value : parseFloat(r.value) || 0
@@ -189,7 +200,7 @@ export class ChartManager {
                 data: data
             });
         } catch (error) {
-            console.warn('Chart data collection failed:', error);
+            console.error('Chart data collection error:', error);
         } finally {
             this.isCollecting = false;
         }

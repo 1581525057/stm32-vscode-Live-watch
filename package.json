@@ -2,9 +2,9 @@
   "name": "stm32-vscode-Live-watch",
   "displayName": "STM32 Live Watch",
   "description": "STM32 实时变量监视与图表可视化 VS Code 插件，支持 EIDE AXF 自动转换 ELF 后读取、修改和绘制全局变量。",
-  "version": "3.3.0",
+  "version": "3.5.0",
   "publisher": "yezi",
-  "author": "yezi",
+  "author": "ciyueYe",
   "icon": "resources/icon.jpg",
   "keywords": [
     "STM32",
@@ -58,6 +58,11 @@
         "command": "stm32-live-watch.refreshVariables",
         "title": "STM32 Live Watch: Refresh Variables",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "stm32-live-watch.dumpDwarfVars",
+        "title": "STM32 Live Watch: Dump DWARF Variables (Debug)",
+        "icon": "$(bug)"
       },
       {
         "command": "stm32-live-watch.addVariable",
