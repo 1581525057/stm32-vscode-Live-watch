@@ -123,6 +123,66 @@
     var selWindow = document.getElementById('selWindow');
     var selInterval = document.getElementById('selInterval');
 
+    // 页面 tab 相关 DOM
+    var pageTabList = document.getElementById('pageTabList');
+    var btnAddPage = document.getElementById('btnAddPage');
+
+    // 页面状态
+    var chartPages = [];
+    var activePageIndex = 0;
+
+    // 渲染 tab 列表
+    function renderPageTabs() {
+        while (pageTabList.firstChild) pageTabList.removeChild(pageTabList.firstChild);
+        chartPages.forEach(function(page, index) {
+            var tab = document.createElement('div');
+            tab.className = 'page-tab' + (index === activePageIndex ? ' active' : '');
+            tab.textContent = page.name;
+            tab.addEventListener('click', function() {
+                vscode.postMessage({ type: 'switchPage', pageIndex: index });
+            });
+
+            // 右键菜单：重命名
+            tab.addEventListener('contextmenu', function(e) {
+                e.preventDefault();
+                vscode.postMessage({ type: 'renamePage' });
+            });
+
+            // 关闭按钮（多于 1 页时显示）
+            if (chartPages.length > 1) {
+                var close = document.createElement('span');
+                close.className = 'tab-close';
+                close.textContent = '✕';
+                close.title = '删除此页面';
+                close.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    vscode.postMessage({ type: 'deletePage', pageIndex: index });
+                });
+                tab.appendChild(close);
+            }
+
+            pageTabList.appendChild(tab);
+        });
+    }
+
+    btnAddPage.addEventListener('click', function() {
+        vscode.postMessage({ type: 'addPage' });
+    });
+
+    // 清除当前页面图表数据（不重置时间基准）
+    function clearCurrentPageData() {
+        chart.data.datasets = [];
+        datasets.clear();
+        colorIndex = 0;
+        yMin = Infinity;
+        yMax = -Infinity;
+        trimCount = 0;
+        updateAxisRange();
+        updateYAxisRange();
+        chart.update('none');
+        renderLegend();
+    }
+
     // 工具栏事件
     btnAdd.addEventListener('click', function () {
         vscode.postMessage({ type: 'addVariable' });
@@ -467,6 +527,22 @@
             case 'clear':
                 resetChart();
                 renderLegend();
+                break;
+            case 'switchPage':
+                chartPages = msg.pages || [];
+                activePageIndex = msg.pageIndex || 0;
+                clearCurrentPageData();
+                renderPageTabs();
+                break;
+            case 'updatePageList':
+                chartPages = msg.pages || [];
+                if (msg.activeIndex !== undefined) {
+                    activePageIndex = msg.activeIndex;
+                }
+                renderPageTabs();
+                break;
+            case 'clearPage':
+                clearCurrentPageData();
                 break;
             case 'themeChanged':
                 var colors = getThemeColors();

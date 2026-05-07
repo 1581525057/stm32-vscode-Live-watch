@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>STM32 Live Watch - 工具栏设计方案对比</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #1e1e1e;
+    color: #cccccc;
+    padding: 40px;
+  }
+  h1 {
+    text-align: center;
+    color: #e0e0e0;
+    margin-bottom: 8px;
+    font-size: 28px;
+    font-weight: 600;
+  }
+  .subtitle {
+    text-align: center;
+    color: #888;
+    margin-bottom: 48px;
+    font-size: 14px;
+  }
+  .options-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 32px;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+  .option-card {
+    background: #252526;
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid #3c3c3c;
+    transition: border-color 0.2s;
+  }
+  .option-card:hover {
+    border-color: #007acc;
+  }
+  .option-card.recommended {
+    border-color: #007acc;
+    box-shadow: 0 0 0 1px #007acc;
+  }
+  .option-header {
+    padding: 20px 24px 16px;
+    border-bottom: 1px solid #3c3c3c;
+  }
+  .option-label {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 10px;
+  }
+  .option-card:nth-child(1) .option-label { background: #264f78; color: #75beff; }
+  .option-card:nth-child(2) .option-label { background: #1a5c3a; color: #6bc46d; }
+  .option-card:nth-child(3) .option-label { background: #5c3a1a; color: #e8a838; }
+  .option-title {
+    font-size: 18px;
+    font-weight: 600;
+    color: #e0e0e0;
+    margin-bottom: 6px;
+  }
+  .option-desc {
+    font-size: 13px;
+    color: #999;
+    line-height: 1.5;
+  }
+
+  /* 模拟 VS Code 侧边栏 */
+  .vscode-mock {
+    margin: 20px 24px 24px;
+    background: #252526;
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  /* 标题栏 - 这是我们要优化的核心 */
+  .view-title-bar {
+    display: flex;
+    align-items: center;
+    height: 36px;
+    padding: 0 8px 0 12px;
+    background: #252526;
+    border-bottom: 1px solid #3c3c3c;
+    gap: 4px;
+  }
+  .view-title {
+    flex: 1;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #bbbbbb;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+  }
+  .view-title .highlight {
+    color: #4fc1ff;
+    font-weight: 700;
+  }
+  .view-title .accent {
+    color: #c586c0;
+  }
+  .view-title .green {
+    color: #6a9955;
+  }
+  /* 图标按钮 */
+  .icon-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 4px;
+    cursor: pointer;
+    color: #999;
+    font-size: 14px;
+    flex-shrink: 0;
+    position: relative;
+    transition: background 0.1s, color 0.1s;
+  }
+  .icon-btn:hover {
+    background: #3c3c3c;
+    color: #e0e0e0;
+  }
+  .icon-btn.primary {
+    color: #4fc1ff;
+  }
+  .icon-btn.danger {
+    color: #f44747;
+  }
+  .icon-btn.more-btn {
+    width: 24px;
+    font-size: 16px;
+    letter-spacing: 1px;
+    color: #888;
+  }
+  /* 页面指示器 */
+  .page-indicator {
+    font-size: 10px;
+    color: #888;
+    padding: 0 4px;
+    white-space: nowrap;
+    background: #333;
+    border-radius: 3px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex-shrink: 0;
+  }
+  .page-indicator .page-name {
+    color: #dcdcaa;
+    max-width: 60px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* 树内容 */
+  .tree-content {
+    padding: 4px 0;
+  }
+  .tree-item {
+    display: flex;
+    align-items: center;
+    height: 22px;
+    padding: 0 12px;
+    font-size: 12px;
+    gap: 6px;
+  }
+  .tree-item:hover {
+    background: #2a2d2e;
+  }
+  .tree-icon { color: #569cd6; font-size: 12px; width: 16px; text-align: center; }
+  .tree-label { color: #d4d4d4; }
+  .tree-type { color: #6a9955; margin-left: auto; font-size: 11px; }
+  .tree-value { color: #ce9178; }
+  .tree-expand { color: #888; font-size: 10px; width: 16px; text-align: center; }
+
+  /* 方案对比表 */
+  .comparison {
+    max-width: 1400px;
+    margin: 48px auto 0;
+    background: #252526;
+    border-radius: 12px;
+    border: 1px solid #3c3c3c;
+    overflow: hidden;
+  }
+  .comparison-header {
+    padding: 20px 24px;
+    border-bottom: 1px solid #3c3c3c;
+  }
+  .comparison-header h2 {
+    font-size: 16px;
+    color: #e0e0e0;
+  }
+  .comparison table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  .comparison th, .comparison td {
+    padding: 12px 20px;
+    text-align: left;
+    border-bottom: 1px solid #333;
+    font-size: 13px;
+  }
+  .comparison th {
+    color: #999;
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .comparison td { color: #ccc; }
+  .check { color: #6bc46d; }
+  .cross { color: #f44747; }
+  .star { color: #e8a838; }
+
+  /* 更多菜单展开示意 */
+  .menu-popup {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    width: 220px;
+    background: #3c3c3c;
+    border: 1px solid #555;
+    border-radius: 4px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+    z-index: 10;
+    padding: 4px 0;
+    display: none;
+  }
+  .menu-popup.show { display: block; }
+  .menu-item {
+    display: flex;
+    align-items: center;
+    height: 28px;
+    padding: 0 12px;
+    font-size: 12px;
+    color: #ccc;
+    gap: 10px;
+    cursor: pointer;
+  }
+  .menu-item:hover { background: #094771; }
+  .menu-item .mi-icon { width: 16px; text-align: center; color: #999; font-size: 12px; }
+  .menu-item .mi-label { flex: 1; }
+  .menu-item .mi-key { color: #888; font-size: 11px; }
+  .menu-sep {
+    height: 1px;
+    background: #555;
+    margin: 4px 0;
+  }
+
+  /* 强调色选项 */
+  .title-variants {
+    max-width: 1400px;
+    margin: 48px auto 0;
+    background: #252526;
+    border-radius: 12px;
+    border: 1px solid #3c3c3c;
+    overflow: hidden;
+  }
+  .title-variants .tv-header {
+    padding: 20px 24px;
+    border-bottom: 1px solid #3c3c3c;
+  }
+  .title-variants .tv-header h2 {
+    font-size: 16px;
+    color: #e0e0e0;
+  }
+  .title-variants .tv-header p {
+    font-size: 13px;
+    color: #999;
+    margin-top: 4px;
+  }
+  .tv-row {
+    display: flex;
+    align-items: center;
+    padding: 12px 24px;
+    border-bottom: 1px solid #333;
+    gap: 32px;
+  }
+  .tv-row:last-child { border-bottom: none; }
+  .tv-label {
+    width: 140px;
+    font-size: 12px;
+    color: #999;
+    flex-shrink: 0;
+  }
+  .tv-title-bar {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    height: 32px;
+    background: #1e1e1e;
+    border-radius: 4px;
+    padding: 0 8px 0 12px;
+    gap: 4px;
+  }
+  .tv-title {
+    flex: 1;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+</style>
+</head>
+<body>
+
+<h1>STM32 Live Watch - 工具栏优化方案</h1>
+<p class="subtitle">当前问题：标题栏 10 个图标拥挤，标题被挤压 → 以下 3 种方案对比</p>
+
+<div class="options-grid">
+
+  <!-- 方案 A -->
+  <div class="option-card">
+    <div class="option-header">
+      <div class="option-label">方案 A</div>
+      <div class="option-title">极简核心 + 更多菜单</div>
+      <div class="option-desc">仅保留 2 个最核心按钮，其余全部收入「···」菜单。最干净。</div>
+    </div>
+    <div class="vscode-mock">
+      <div class="view-title-bar">
+        <span class="view-title"><span class="highlight">Live Watch</span> 实时变量</span>
+        <div class="icon-btn primary" title="启动/停止">▶</div>
+        <div class="icon-btn" title="添加变量">＋</div>
+        <div class="icon-btn more-btn" title="更多操作" onclick="this.querySelector('.menu-popup').classList.toggle('show')">···
+          <div class="menu-popup">
+            <div class="menu-item"><span class="mi-icon">↻</span><span class="mi-label">刷新变量</span><span class="mi-key">Ctrl+R</span></div>
+            <div class="menu-sep"></div>
+            <div class="menu-item"><span class="mi-icon">◀</span><span class="mi-label">上一页</span></div>
+            <div class="menu-item"><span class="mi-icon">▶</span><span class="mi-label">下一页</span></div>
+            <div class="menu-sep"></div>
+            <div class="menu-item"><span class="mi-icon">＋</span><span class="mi-label">新建页面</span></div>
+            <div class="menu-item"><span class="mi-icon">✎</span><span class="mi-label">重命名页面</span></div>
+            <div class="menu-item"><span class="mi-icon">🗑</span><span class="mi-label">删除页面</span></div>
+            <div class="menu-sep"></div>
+            <div class="menu-item"><span class="mi-icon">📊</span><span class="mi-label">打开图表</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="tree-content">
+        <div class="tree-item"><span class="tree-expand">▼</span><span class="tree-icon">◆</span><span class="tree-label">sys_master { ... }</span><span class="tree-type">SystemMaster_t</span></div>
+        <div class="tree-item" style="padding-left:28px"><span class="tree-icon">◇</span><span class="tree-label">main_sensor = 42</span><span class="tree-type">uint32_t</span></div>
+        <div class="tree-item" style="padding-left:28px"><span class="tree-icon">◇</span><span class="tree-label">status = 0x01</span><span class="tree-type">uint8_t</span></div>
+        <div class="tree-item"><span class="tree-icon">◇</span><span class="tree-label">g_counter = 1024</span><span class="tree-type">volatile int</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 方案 B -->
+  <div class="option-card recommended">
+    <div class="option-header">
+      <div class="option-label">方案 B · 推荐</div>
+      <div class="option-title">核心 + 页面导航 + 更多菜单</div>
+      <div class="option-desc">保留 3 个核心按钮 + 页面切换（高频操作），低频操作收入「···」。平衡功能与美观。</div>
+    </div>
+    <div class="vscode-mock">
+      <div class="view-title-bar">
+        <span class="view-title"><span class="highlight">Live Watch</span> 实时变量</span>
+        <div class="icon-btn primary" title="启动/停止">▶</div>
+        <div class="icon-btn" title="添加变量">＋</div>
+        <div class="page-indicator"><span class="page-name">Motor</span> 1/3</div>
+        <div class="icon-btn" title="上一页" style="font-size:10px">◀</div>
+        <div class="icon-btn" title="下一页" style="font-size:10px">▶</div>
+        <div class="icon-btn more-btn" title="更多操作" onclick="this.querySelector('.menu-popup').classList.toggle('show')">···
+          <div class="menu-popup">
+            <div class="menu-item"><span class="mi-icon">↻</span><span class="mi-label">刷新变量</span><span class="mi-key">Ctrl+R</span></div>
+            <div class="menu-sep"></div>
+            <div class="menu-item"><span class="mi-icon">＋</span><span class="mi-label">新建页面</span></div>
+            <div class="menu-item"><span class="mi-icon">✎</span><span class="mi-label">重命名页面</span></div>
+            <div class="menu-item"><span class="mi-icon">🗑</span><span class="mi-label">删除页面</span></div>
+            <div class="menu-sep"></div>
+            <div class="menu-item"><span class="mi-icon">📊</span><span class="mi-label">打开图表</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="tree-content">
+        <div class="tree-item"><span class="tree-expand">▼</span><span class="tree-icon">◆</span><span class="tree-label">sys_master { ... }</span><span class="tree-type">SystemMaster_t</span></div>
+        <div class="tree-item" style="padding-left:28px"><span class="tree-icon">◇</span><span class="tree-label">main_sensor = 42</span><span class="tree-type">uint32_t</span></div>
+        <div class="tree-item" style="padding-left:28px"><span class="tree-icon">◇</span><span class="tree-label">status = 0x01</span><span class="tree-type">uint8_t</span></div>
+        <div class="tree-item"><span class="tree-icon">◇</span><span class="tree-label">g_counter = 1024</span><span class="tree-type">volatile int</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 方案 C -->
+  <div class="option-card">
+    <div class="option-header">
+      <div class="option-label">方案 C</div>
+      <div class="option-title">智能分组 + 紧凑布局</div>
+      <div class="option-desc">将页面切换合并为一个组合控件，最大化利用空间，适合多页面重度用户。</div>
+    </div>
+    <div class="vscode-mock">
+      <div class="view-title-bar">
+        <span class="view-title"><span class="highlight">Live Watch</span></span>
+        <div class="icon-btn primary" title="启动/停止">▶</div>
+        <div class="icon-btn" title="添加变量">＋</div>
+        <div class="page-indicator" style="gap:1px; padding:0 2px">
+          <div class="icon-btn" title="上一页" style="width:18px;height:18px;font-size:9px">◀</div>
+          <span class="page-name" style="max-width:48px">Motor</span>
+          <span style="color:#666;font-size:9px">1/3</span>
+          <div class="icon-btn" title="下一页" style="width:18px;height:18px;font-size:9px">▶</div>
+        </div>
+        <div class="icon-btn more-btn" title="更多操作">···</div>
+      </div>
+      <div class="tree-content">
+        <div class="tree-item"><span class="tree-expand">▼</span><span class="tree-icon">◆</span><span class="tree-label">sys_master { ... }</span><span class="tree-type">SystemMaster_t</span></div>
+        <div class="tree-item" style="padding-left:28px"><span class="tree-icon">◇</span><span class="tree-label">main_sensor = 42</span><span class="tree-type">uint32_t</span></div>
+        <div class="tree-item" style="padding-left:28px"><span class="tree-icon">◇</span><span class="tree-label">status = 0x01</span><span class="tree-type">uint8_t</span></div>
+        <div class="tree-item"><span class="tree-icon">◇</span><span class="tree-label">g_counter = 1024</span><span class="tree-type">volatile int</span></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- 标题颜色方案 -->
+<div class="title-variants">
+  <div class="tv-header">
+    <h2>标题配色方案 - 让「Live Watch」更醒目</h2>
+    <p>VS Code 侧边栏标题默认是大写灰色，以下几种方式可以让标题更有辨识度和质感</p>
+  </div>
+  <div class="tv-row">
+    <div class="tv-label">方案 ① · 科技蓝高亮</div>
+    <div class="tv-title-bar">
+      <span class="tv-title"><span style="color:#4fc1ff;font-weight:700">Live Watch</span> <span style="color:#888">实时变量</span></span>
+      <div class="icon-btn primary" style="font-size:12px">▶</div>
+      <div class="icon-btn" style="font-size:12px">＋</div>
+      <div class="icon-btn more-btn" style="font-size:14px">···</div>
+    </div>
+  </div>
+  <div class="tv-row">
+    <div class="tv-label">方案 ② · 渐变紫蓝</div>
+    <div class="tv-title-bar">
+      <span class="tv-title"><span style="background:linear-gradient(90deg,#4fc1ff,#c586c0);-webkit-background-clip:text;-webkit-text-fill-color:transparent;font-weight:700">Live Watch</span> <span style="color:#888">实时变量</span></span>
+      <div class="icon-btn primary" style="font-size:12px">▶</div>
+      <div class="icon-btn" style="font-size:12px">＋</div>
+      <div class="icon-btn more-btn" style="font-size:14px">···</div>
+    </div>
+  </div>
+  <div class="tv-row">
+    <div class="tv-label">方案 ③ · 薄荷绿清新</div>
+    <div class="tv-title-bar">
+      <span class="tv-title"><span style="color:#4ec9b0;font-weight:700">Live Watch</span> <span style="color:#888">实时变量</span></span>
+      <div class="icon-btn primary" style="font-size:12px">▶</div>
+      <div class="icon-btn" style="font-size:12px">＋</div>
+      <div class="icon-btn more-btn" style="font-size:14px">···</div>
+    </div>
+  </div>
+  <div class="tv-row">
+    <div class="tv-label">方案 ④ · 琥珀暖色</div>
+    <div class="tv-title-bar">
+      <span class="tv-title"><span style="color:#e8a838;font-weight:700">Live Watch</span> <span style="color:#888">实时变量</span></span>
+      <div class="icon-btn primary" style="font-size:12px">▶</div>
+      <div class="icon-btn" style="font-size:12px">＋</div>
+      <div class="icon-btn more-btn" style="font-size:14px">···</div>
+    </div>
+  </div>
+  <div class="tv-row">
+    <div class="tv-label">方案 ⑤ · 纯白高对比</div>
+    <div class="tv-title-bar">
+      <span class="tv-title"><span style="color:#ffffff;font-weight:800;letter-spacing:1px">LIVE WATCH</span></span>
+      <div class="icon-btn primary" style="font-size:12px">▶</div>
+      <div class="icon-btn" style="font-size:12px">＋</div>
+      <div class="icon-btn more-btn" style="font-size:14px">···</div>
+    </div>
+  </div>
+</div>
+
+<!-- 对比表 -->
+<div class="comparison">
+  <div class="comparison-header">
+    <h2>方案对比总结</h2>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>维度</th>
+        <th>方案 A · 极简</th>
+        <th>方案 B · 推荐</th>
+        <th>方案 C · 智能分组</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>可见图标数</td>
+        <td>2 个 + 更多</td>
+        <td>4 个 + 更多</td>
+        <td>3 个 + 更多</td>
+      </tr>
+      <tr>
+        <td>页面切换</td>
+        <td>需打开菜单</td>
+        <td><span class="check">✓ 直接点击</span></td>
+        <td><span class="check">✓ 直接点击</span></td>
+      </tr>
+      <tr>
+        <td>视觉简洁度</td>
+        <td><span class="star">★★★★★</span></td>
+        <td><span class="star">★★★★</span></td>
+        <td><span class="star">★★★★☆</span></td>
+      </tr>
+      <tr>
+        <td>操作效率</td>
+        <td>★★★</td>
+        <td><span class="star">★★★★★</span></td>
+        <td><span class="star">★★★★</span></td>
+      </tr>
+      <tr>
+        <td>实现复杂度</td>
+        <td>低</td>
+        <td>中</td>
+        <td>高（自定义控件）</td>
+      </tr>
+      <tr>
+        <td>VS Code 原生风格</td>
+        <td><span class="check">✓ 完美</span></td>
+        <td><span class="check">✓ 很好</span></td>
+        <td>略偏离</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<div style="max-width:1400px;margin:48px auto 0;padding:24px;background:#252526;border-radius:12px;border:1px solid #3c3c3c">
+  <h2 style="font-size:16px;color:#e0e0e0;margin-bottom:16px">实现说明</h2>
+  <div style="font-size:13px;color:#aaa;line-height:2">
+    <p><strong>「···」更多菜单的实现方式：</strong>VS Code 原生不支持 view/title 下拉菜单，但可以通过注册一个命令 + <code>vscode.window.showQuickPick()</code> 来模拟。点击「···」按钮时弹出 Quick Pick 菜单，列出所有收纳的操作项。</p>
+    <p><strong>页面指示器：</strong>方案 B/C 中的页面指示器使用 <code>enablement: "false"</code> 的静态命令来显示文本，与当前实现一致。</p>
+    <p><strong>启动/停止合并：</strong>可以合并为一个按钮，根据服务器状态动态切换图标和命令（使用 <code>when</code> 条件）。</p>
+    <p><strong>标题颜色：</strong>VS Code 原生 view 标题不支持内联样式，但可以通过 <code>window.createTreeView()</code> 的 <code>name</code> 属性配合 Unicode 装饰字符来增强视觉效果，或者在树的第一项添加一个装饰性的 header item。</p>
+  </div>
+</div>
+
+</body>
+</html>

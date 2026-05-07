@@ -1,4 +1,5 @@
 import argparse
+import collections
 import json
 import socket
 import struct
@@ -51,37 +52,50 @@ class TclRpcClient:
                 self.sock.close()
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            self.sock.settimeout(0.5)
+            self.sock.settimeout(0.1)
             self.sock.connect((self.host, self.port))
         except Exception:
             self.sock = None
 
+    def _send_rpc_unlocked(self, cmd: str) -> str:
+        """底层 RPC 发送方法，调用者需自行持有 self.lock"""
+        if not self.sock:
+            self._connect()
+        if not self.sock:
+            return ""
+        try:
+            self.sock.sendall(cmd.encode("ascii") + b"\x1a")
+            chunks = []
+            start_time = time.monotonic()
+            while True:
+                if time.monotonic() - start_time > 5.0:
+                    raise ConnectionError("OpenOCD response timeout (5s)")
+                chunk = self.sock.recv(16384)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                if b"\x1a" in chunk:
+                    break
+            return b"".join(chunks).decode("ascii", errors="ignore").strip("\x1a")
+        except ConnectionError:
+            self._connect()
+            return ""
+        except Exception:
+            self._connect()
+            return ""
+
     def _send_rpc(self, cmd: str) -> str:
         with self.lock:
+            return self._send_rpc_unlocked(cmd)
+
+    def is_connected(self) -> bool:
+        """持锁检查 socket 连通性，并发一个轻量 RPC 验证 OpenOCD 可达"""
+        with self.lock:
             if not self.sock:
-                self._connect()
-            if not self.sock:
-                return ""
-            try:
-                self.sock.sendall(cmd.encode("ascii") + b"\x1a")
-                chunks = []
-                start_time = time.monotonic()
-                while True:
-                    if time.monotonic() - start_time > 5.0:
-                        raise ConnectionError("OpenOCD response timeout (5s)")
-                    chunk = self.sock.recv(16384)
-                    if not chunk:
-                        break
-                    chunks.append(chunk)
-                    if b"\x1a" in chunk:
-                        break
-                return b"".join(chunks).decode("ascii", errors="ignore").strip("\x1a")
-            except ConnectionError:
-                self._connect()
-                return ""
-            except Exception:
-                self._connect()
-                return ""
+                return False
+            # 发送轻量 RPC 验证连通性，避免 TOCTOU 竞态
+            result = self._send_rpc_unlocked("echo ping")
+            return bool(result)
 
     def batch_read(self, nodes: list[VariableNode]) -> list[Any]:
         if not nodes:
@@ -139,6 +153,33 @@ class TclRpcClient:
             return bytes([int(h, 16) for h in hex_tokens[:size]])
         except Exception:
             return b""
+
+    def _batch_read_raw_bytes(self, requests: list[tuple[int, int]]) -> list[bytes]:
+        """批量读取原始字节，获取一次锁处理所有请求，减少锁竞争
+        requests: [(addr, size), ...]
+        返回: [bytes, ...] 与 requests 一一对应
+
+        注意：OpenOCD TCL RPC 没有标准的批量内存读取接口，
+        此处优化主要通过减少锁获取/释放次数来降低竞争开销。
+        """
+        if not requests:
+            return []
+        results: list[bytes] = []
+        with self.lock:
+            for addr, size in requests:
+                raw_res = self._send_rpc_unlocked(f'capture "mdb {hex(addr)} {size}"')
+                hex_tokens = []
+                try:
+                    for line in raw_res.splitlines():
+                        if ':' in line:
+                            tokens = line.split(':', 1)[1].split()
+                            for t in tokens:
+                                if len(t) == 2 and all(c in "0123456789abcdefABCDEF" for c in t):
+                                    hex_tokens.append(t)
+                    results.append(bytes([int(h, 16) for h in hex_tokens[:size]]))
+                except Exception:
+                    results.append(b"")
+        return results
 
     def read_memory_bytes(self, addr: int, size: int) -> str:
         """使用 mdb 读取指定长度的内存并转为字符串"""
@@ -264,6 +305,9 @@ class ElfExpert:
         self.type_die_map: dict[tuple[int, int], Any] = {}
         self.type_abs_offset_map: dict[int, Any] = {}  # die.offset -> die，用于快速绝对偏移查找
         self.type_off_to_cu: dict[int, int] = {}  # 优化#1：反向索引，type_off -> 第一个 cu_off
+        # DWARF 类型解析结果缓存，限制最大 1000 条目，超出时清空最旧的一半
+        self._type_info_cache: collections.OrderedDict[tuple[int, int], dict[str, Any]] = collections.OrderedDict()
+        self._type_info_cache_max = 1000
         self.type_definition_map: dict[tuple[Any, ...], Any] = {}
         with open(path, "rb") as file:
             elffile = ELFFile(file)
@@ -302,8 +346,64 @@ class ElfExpert:
             for name, (addr, type_off, cu_off) in self.root_var_info.items():
                 self.root_var_cache[name] = self._resolve_type_info(type_off, cu_off)
 
+    def _is_cpp_class(self, die: Any) -> bool:
+        """判断 DW_TAG_structure_type 是否为 C++ class（AC5 兼容）。
+        多重启发式检测：type_definition_map、成员函数、继承、访问修饰符、模板参数。"""
+        if not die:
+            return False
+        # 方法 1：查找 type_definition_map 中是否有同名的 DW_TAG_class_type 定义
+        # 注意：交叉注册会把 structure_type 也放到 class_type key 下，
+        # 所以必须检查找到的 die 的 tag 是否真的是 DW_TAG_class_type
+        type_name = self._decode_attr_string(die, "DW_AT_name")
+        if type_name:
+            tdm = getattr(self, "type_definition_map", {})
+            class_die = tdm.get(("DW_TAG_class_type", type_name))
+            if class_die and class_die.tag == "DW_TAG_class_type" and not self._is_declaration_die(class_die):
+                return True
+        # 方法 2：检查 C++ 特征子节点
+        try:
+            for child in die.iter_children():
+                # 成员函数、继承、模板类型参数
+                if child.tag in ("DW_TAG_subprogram", "DW_TAG_inheritance", "DW_TAG_template_type_parameter"):
+                    return True
+                # 访问修饰符（private/protected/public）—— C struct 无此属性
+                if child.tag == "DW_TAG_member" and child.attributes.get("DW_AT_accessibility"):
+                    return True
+        except Exception:
+            pass
+        return False
+
+    def _classify_type(self, die: Any) -> tuple[str, bool]:
+        """根据 DWARF tag 确定类型分类，返回 (v_type, has_children)。
+        AC5 会将 C++ class 编码为 DW_TAG_structure_type，通过启发式检测修正。"""
+        if not die:
+            return ("value", False)
+        tag = die.tag
+        if tag == "DW_TAG_array_type":
+            return ("array", True)
+        if tag == "DW_TAG_class_type":
+            return ("class", True)
+        if tag == "DW_TAG_union_type":
+            return ("union", True)
+        if tag == "DW_TAG_enumeration_type":
+            return ("enum", False)
+        if tag == "DW_TAG_structure_type":
+            # AC5 兼容：检查是否有 C++ 特征（成员函数或继承）
+            is_cpp = self._is_cpp_class(die)
+            if is_cpp:
+                return ("class", True)
+            return ("struct", True)
+        return ("value", False)
+
     def _resolve_type_info(self, type_off: int, cu_off: int) -> dict[str, Any]:
         """沿 typedef/const/volatile 链解析真实类型名、大小和 has_children"""
+        # 检查缓存，避免重复解析同一类型
+        cache_key = (cu_off, type_off)
+        cached = self._type_info_cache.get(cache_key)
+        if cached is not None:
+            # 命中时移到末尾（标记为最近使用）
+            self._type_info_cache.move_to_end(cache_key)
+            return cached
         die = self._lookup_type_die(cu_off, type_off)
         if not die:
             return {"type_name": "", "size": 0, "has_children": False}
@@ -330,8 +430,16 @@ class ElfExpert:
                 type_name = name_attr.value.decode("utf-8")
             byte_size = real_die.attributes.get("DW_AT_byte_size")
             size = byte_size.value if byte_size else size
-        has_children = real_die.tag in ("DW_TAG_structure_type", "DW_TAG_class_type", "DW_TAG_union_type", "DW_TAG_array_type") if real_die else False
-        return {"type_name": type_name, "size": size, "has_children": has_children}
+        # 使用统一的类型分类逻辑
+        v_type, has_children = self._classify_type(real_die)
+        result = {"type_name": type_name, "size": size, "has_children": has_children, "v_type": v_type}
+        # 缓存容量检查：超出上限时清空最旧的一半
+        if len(self._type_info_cache) >= self._type_info_cache_max:
+            evict_count = self._type_info_cache_max // 2
+            for _ in range(evict_count):
+                self._type_info_cache.popitem(last=False)
+        self._type_info_cache[cache_key] = result
+        return result
 
     def _decode_attr_string(self, die: Any, attr_name: str) -> str | None:
         attr = die.attributes.get(attr_name)
@@ -706,7 +814,9 @@ class ElfExpert:
             current_size = byte_size.value if byte_size else current_size
 
             # 关键修复：current_size 必须从 DWARF 读取，不能固定为 0
-            struct_node = VariableNode(name, addr, "struct", current_size, type_name or "struct")
+            # 使用统一的类型分类逻辑（含 AC5 C++ class 启发式检测）
+            v_type, _ = self._classify_type(die)
+            struct_node = VariableNode(name, addr, v_type, current_size, type_name or v_type)
             skipped_members = []
             for child in die.iter_children():
                 if child.tag == "DW_TAG_member":
@@ -791,11 +901,12 @@ class DebugDataServer:
             type_name = cached.get("type_name", "")
             size = cached.get("size", 0)
             has_children = cached.get("has_children", False)
+            v_type = cached.get("v_type", "struct" if has_children else "value")
             results.append({
                 "name": name,
                 "path": name,
                 "address": hex(addr),
-                "type": "struct" if has_children else "value",
+                "type": v_type,
                 "typeName": type_name,
                 "size": size,
                 "hasChildren": has_children,
@@ -851,7 +962,10 @@ class DebugDataServer:
 
     def describe(self, path: str) -> dict[str, Any] | None:
         node = self.resolve_path(path)
-        return node.to_summary(path) if node else None
+        if node:
+            summary = node.to_summary(path)
+            return summary
+        return None
 
     def list_children(self, path: str) -> list[dict[str, Any]] | None:
         node = self.resolve_path(path)
@@ -896,37 +1010,53 @@ class DebugDataServer:
         results = []
         # 分离普通变量和字符串变量
         normal_nodes = []
-        
+        # 收集需要批量读取的请求（字符串和 64 位值），减少锁竞争
+        batch_requests: list[tuple[int, int]] = []  # (addr, size)
+        batch_meta: list[tuple[int, str, VariableNode | None]] = []  # (results索引, 类型标记, node引用)
+
         for path in paths:
             node = self.resolve_path(path)
             if not node: continue
-            
-            if node.type == "string":
-                # 字符串单独处理，读完整长度
-                str_val = self.rpc.read_memory_bytes(node.addr, node.size)
-                results.append({"path": path, "value": str_val, "address": hex(node.addr)})
-            
-            # 🔥 核心修复：把 8 字节的整数 (int64/uint64) 和 double 一起拦截下来处理！
-            elif node.type == "double" or (node.type == "int" and node.size == 8):
-                raw_bytes = self.rpc.read_raw_bytes(node.addr, 8) 
-                if len(raw_bytes) == 8:
-                    if node.type == "double":
-                        val = round(struct.unpack("<d", raw_bytes)[0], 4)
-                    else:
-                        # 判定是否有符号：<Q 是无符号 64 位，<q 是有符号 64 位
-                        is_unsigned = "unsigned" in node.type_name.lower() or "uint" in node.type_name.lower()
-                        fmt = "<Q" if is_unsigned else "<q"
-                        val = struct.unpack(fmt, raw_bytes)[0]
-                    val = str(val)
-                else:
-                    val = "ERR"
-                results.append({"path": path, "value": val, "address": hex(node.addr)})
 
-            elif node.type == "struct":
+            if node.type == "string":
+                idx = len(results)
+                results.append({"path": path, "value": None, "address": hex(node.addr)})
+                batch_requests.append((node.addr, node.size))
+                batch_meta.append((idx, "string", None))
+
+            # 8 字节的整数 (int64/uint64) 和 double
+            elif node.type == "double" or (node.type == "int" and node.size == 8):
+                idx = len(results)
+                results.append({"path": path, "value": None, "address": hex(node.addr)})
+                batch_requests.append((node.addr, 8))
+                batch_meta.append((idx, "raw64", node))
+
+            elif node.type in ("struct", "class", "union"):
                 results.append({"path": path, "value": "{...}", "address": hex(node.addr)})
             else:
                 normal_nodes.append((path, node))
-        
+
+        # 批量读取字符串和 64 位值的原始字节（一次获取锁，减少锁竞争）
+        if batch_requests:
+            raw_results = self.rpc._batch_read_raw_bytes(batch_requests)
+            for i, raw_bytes in enumerate(raw_results):
+                idx, kind, node = batch_meta[i]
+                if kind == "string":
+                    # 字符串：截断到第一个 \0，解码为 ASCII
+                    results[idx]["value"] = raw_bytes.split(b'\x00')[0].decode('ascii', errors='ignore')
+                else:  # raw64
+                    if len(raw_bytes) == 8:
+                        if node.type == "double":
+                            val = round(struct.unpack("<d", raw_bytes)[0], 4)
+                        else:
+                            # 判定是否有符号：<Q 是无符号 64 位，<q 是有符号 64 位
+                            is_unsigned = "unsigned" in node.type_name.lower() or "uint" in node.type_name.lower()
+                            fmt = "<Q" if is_unsigned else "<q"
+                            val = struct.unpack(fmt, raw_bytes)[0]
+                        results[idx]["value"] = str(val)
+                    else:
+                        results[idx]["value"] = "ERR"
+
         # 普通变量继续使用原来的批量读取优化
         if normal_nodes:
             nodes_only = [n[1] for n in normal_nodes]
@@ -950,7 +1080,7 @@ class DebugDataServer:
         
     def write_value(self, path: str, value: str) -> bool:
         node = self.resolve_path(path)
-        return bool(node and node.type != "struct" and self.rpc.write(node, value))
+        return bool(node and node.type not in ("struct", "class", "union") and self.rpc.write(node, value))
 
     def handle(self, request: dict[str, Any]) -> dict[str, Any]:
         command = request.get("command")
@@ -980,7 +1110,8 @@ class DebugDataServer:
             value = str(request.get("value", ""))
             return {"ok": True, "result": {"path": path, "value": value}} if self.write_value(path, value) else {"ok": False, "error": f"Write failed for {path}"}
         if command == "is_server_ready":
-            is_ready = self.rpc.sock is not None # 或者执行一个轻量级的 mdw
+            # 持锁 + 轻量 RPC 验证连通性，修复 TOCTOU 竞态条件
+            is_ready = self.rpc.is_connected()
             return {"ok": True, "result": {"ready": is_ready}}
         return {"ok": False, "error": f"Unknown command: {command}"}
 

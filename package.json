@@ -2,7 +2,7 @@
   "name": "stm32-vscode-Live-watch",
   "displayName": "STM32 Live Watch",
   "description": "STM32 实时变量监视与图表可视化 VS Code 插件，支持 EIDE AXF 自动转换 ELF 后读取、修改和绘制全局变量。",
-  "version": "3.5.0",
+  "version": "3.7.0",
   "publisher": "yezi",
   "author": "ciyueYe",
   "icon": "resources/icon.jpg",
@@ -103,6 +103,57 @@
         "command": "stm32-live-watch.showChartPanel",
         "title": "STM32 Live Watch: Show Chart Panel",
         "icon": "$(graph)"
+      },
+      {
+        "command": "stm32-live-watch.addWatchPage",
+        "title": "STM32 Live Watch: Add Watch Page",
+        "icon": "$(add)"
+      },
+      {
+        "command": "stm32-live-watch.renameWatchPage",
+        "title": "STM32 Live Watch: Rename Watch Page",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "stm32-live-watch.deleteWatchPage",
+        "title": "STM32 Live Watch: Delete Watch Page",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "stm32-live-watch.prevWatchPage",
+        "title": "STM32 Live Watch: Previous Watch Page",
+        "icon": "$(chevron-left)"
+      },
+      {
+        "command": "stm32-live-watch.nextWatchPage",
+        "title": "STM32 Live Watch: Next Watch Page",
+        "icon": "$(chevron-right)"
+      },
+      {
+        "command": "stm32-live-watch.addChartPage",
+        "title": "STM32 Live Watch: Add Chart Page",
+        "icon": "$(add)"
+      },
+      {
+        "command": "stm32-live-watch.renameChartPage",
+        "title": "STM32 Live Watch: Rename Chart Page",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "stm32-live-watch.deleteChartPage",
+        "title": "STM32 Live Watch: Delete Chart Page",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "stm32-live-watch.watchPageIndicator",
+        "title": "Watch Page",
+        "icon": "$(list-flat)",
+        "enablement": "false"
+      },
+      {
+        "command": "stm32-live-watch.moreActions",
+        "title": "More Actions...",
+        "icon": "$(ellipsis)"
       }
     ],
     "viewsContainers": {
@@ -125,12 +176,12 @@
       "stm32-debug-panel": [
         {
           "id": "stm32-debug-variables-panel",
-          "name": "1. stm32livewatch实时变量查看",
+          "name": "Live Watch 实时变量",
           "icon": "resources/icon.svg"
         },
         {
           "id": "stm32-debug-operations-panel",
-          "name": "2. 操作",
+          "name": "操作",
           "icon": "resources/icon.svg"
         }
       ],
@@ -146,23 +197,38 @@
       "view/title": [
         {
           "command": "stm32-live-watch.startServer",
-          "when": "view == stm32-debug-variables-panel",
+          "when": "view == stm32-debug-variables-panel && !stm32LiveWatch.serverRunning",
           "group": "navigation@1"
         },
         {
           "command": "stm32-live-watch.stopServer",
-          "when": "view == stm32-debug-variables-panel",
-          "group": "navigation@2"
+          "when": "view == stm32-debug-variables-panel && stm32LiveWatch.serverRunning",
+          "group": "navigation@1"
         },
         {
           "command": "stm32-live-watch.addVariable",
           "when": "view == stm32-debug-variables-panel",
+          "group": "navigation@2"
+        },
+        {
+          "command": "stm32-live-watch.prevWatchPage",
+          "when": "view == stm32-debug-variables-panel",
           "group": "navigation@3"
         },
         {
-          "command": "stm32-live-watch.refreshVariables",
+          "command": "stm32-live-watch.watchPageIndicator",
           "when": "view == stm32-debug-variables-panel",
           "group": "navigation@4"
+        },
+        {
+          "command": "stm32-live-watch.nextWatchPage",
+          "when": "view == stm32-debug-variables-panel",
+          "group": "navigation@5"
+        },
+        {
+          "command": "stm32-live-watch.moreActions",
+          "when": "view == stm32-debug-variables-panel",
+          "group": "navigation@6"
         },
         {
           "command": "stm32-live-watch.addToChart",
@@ -245,9 +311,46 @@
           "default": 10,
           "minimum": 5,
           "description": "Chart time window in seconds"
+        },
+        "stm32LiveWatch.autoWatchAxf": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically convert AXF to ELF when EIDE builds a new AXF file"
         }
       }
-    }
+    },
+    "colors": [
+      {
+        "id": "symbolIcon.structForeground",
+        "description": "Struct symbol icon color",
+        "defaults": { "dark": "#22D3EE", "light": "#0066CC", "highContrast": "#4FC1FF" }
+      },
+      {
+        "id": "symbolIcon.classForeground",
+        "description": "Class symbol icon color",
+        "defaults": { "dark": "#FBBF24", "light": "#795E26", "highContrast": "#DCDCAA" }
+      },
+      {
+        "id": "symbolIcon.arrayForeground",
+        "description": "Array symbol icon color",
+        "defaults": { "dark": "#A78BFA", "light": "#6F2F7B", "highContrast": "#C586C0" }
+      },
+      {
+        "id": "symbolIcon.enumForeground",
+        "description": "Enum/Union symbol icon color",
+        "defaults": { "dark": "#F87171", "light": "#2E7D32", "highContrast": "#6A9955" }
+      },
+      {
+        "id": "symbolIcon.stringForeground",
+        "description": "String symbol icon color",
+        "defaults": { "dark": "#FB923C", "light": "#A31515", "highContrast": "#CE9178" }
+      },
+      {
+        "id": "symbolIcon.variableForeground",
+        "description": "Variable symbol icon color",
+        "defaults": { "dark": "#60A5FA", "light": "#001080", "highContrast": "#9CDCFE" }
+      }
+    ]
   },
   "scripts": {
     "vscode:prepublish": "npm run compile && node copy-server.js",

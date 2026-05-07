@@ -4,11 +4,14 @@ import * as vscode from 'vscode';
 import { affectsLiveWatchConfig, getConfigValue, getLiveWatchConfig } from './config';
 import { generateElfFromEideAxf, resolveElfPathWithAxf, ResolveElfResult } from './elfResolver';
 import { ServerClient } from './serverClient';
+import { PollScheduler } from './pollScheduler';
 import { OperationsTreeDataProvider, VariableTreeDataProvider, VariableTreeItem } from './variableTreeDataProvider';
 import { ChartManager } from './chartManager';
 import { ChartViewProvider } from './chartPanel';
+import { AxfWatcher } from './axfWatcher';
 
 let serverClient: ServerClient;
+let pollScheduler: PollScheduler;
 let variableTreeDataProvider: VariableTreeDataProvider;
 let operationsTreeDataProvider: OperationsTreeDataProvider;
 let autoStartInProgress: Promise<void> | undefined;
@@ -17,14 +20,64 @@ let chartManager: ChartManager;
 export function activate(context: vscode.ExtensionContext) {
     console.log('STM32 Live Watch is now active!');
 
+    // 初始化服务器运行状态（防止窗口重载后 context 残留）
+    vscode.commands.executeCommand('setContext', 'stm32LiveWatch.serverRunning', false);
+
     const serverScriptPath = resolveServerScriptPath(context.extensionPath);
     serverClient = new ServerClient(serverScriptPath);
-    variableTreeDataProvider = new VariableTreeDataProvider(serverClient, context.workspaceState);
+    // 统一轮询调度器：合并变量树和图表的 readPaths 请求
+    pollScheduler = new PollScheduler(serverClient);
+    // 服务器进程意外退出时重置 UI 状态
+    serverClient.onClose(() => {
+        variableTreeDataProvider.stopAutoRefresh();
+        vscode.commands.executeCommand('setContext', 'stm32LiveWatch.serverRunning', false);
+        variableTreeDataProvider.refresh();
+    });
+    variableTreeDataProvider = new VariableTreeDataProvider(serverClient, context.workspaceState, pollScheduler);
     operationsTreeDataProvider = new OperationsTreeDataProvider();
-    const chartManagerInstance = new ChartManager(serverClient, context.workspaceState);
+    const chartManagerInstance = new ChartManager(serverClient, context.workspaceState, pollScheduler);
     chartManager = chartManagerInstance;
     const chartViewProvider = new ChartViewProvider(context.extensionUri, (msg) => chartManagerInstance.handleWebviewMessage(msg));
     chartManagerInstance.attachWebview(chartViewProvider);
+    const axfWatcher = new AxfWatcher(
+        { isRunning: () => serverClient.isRunning() },
+        async (elfPath: string) => {
+            if (serverClient.isRunning()) {
+                // 服务器正在运行，重启以加载新 ELF
+                variableTreeDataProvider.stopAutoRefresh();
+                await serverClient.stopAsync();
+                try {
+                    const host = getConfigValue<string>('openocdHost', '127.0.0.1');
+                    const port = getConfigValue<number>('openocdPort', 50001);
+                    await serverClient.start(elfPath, host, port);
+                    // 等待服务器就绪
+                    let pingSuccess = false;
+                    for (let i = 0; i < 10; i++) {
+                        try {
+                            await serverClient.ping();
+                            pingSuccess = true;
+                            break;
+                        } catch {
+                            await new Promise(resolve => setTimeout(resolve, 200));
+                        }
+                    }
+                    if (!pingSuccess) {
+                        throw new Error('Server failed to respond after 10 ping attempts');
+                    }
+                    await variableTreeDataProvider.loadRootVariables();
+                    vscode.commands.executeCommand('setContext', 'stm32LiveWatch.serverRunning', true);
+                    vscode.window.showInformationMessage(
+                        `ELF 已自动更新，服务器已重启加载新调试信息`
+                    );
+                } catch (error) {
+                    vscode.window.showErrorMessage(
+                        `ELF 更新后服务器重启失败: ${error}。请手动重新启动 Live Watch。`
+                    );
+                    vscode.commands.executeCommand('setContext', 'stm32LiveWatch.serverRunning', false);
+                }
+            }
+        }
+    );
     let panelTreeView: vscode.TreeView<vscode.TreeItem> | undefined;
     let lastSelectedVariableItem: VariableTreeItem | undefined;
 
@@ -39,6 +92,7 @@ export function activate(context: vscode.ExtensionContext) {
     const stopServerCommand = vscode.commands.registerCommand('stm32-live-watch.stopServer', () => {
         variableTreeDataProvider.stopAutoRefresh();
         serverClient.stop();
+        vscode.commands.executeCommand('setContext', 'stm32LiveWatch.serverRunning', false);
         vscode.window.showInformationMessage('STM32 Live Watch server stopped');
     });
 
@@ -184,6 +238,74 @@ export function activate(context: vscode.ExtensionContext) {
         void vscode.commands.executeCommand('stm32-debug-chart-panel.focus');
     });
 
+    // 更多操作菜单
+    const moreActionsCommand = vscode.commands.registerCommand('stm32-live-watch.moreActions', async () => {
+        interface ActionItem extends vscode.QuickPickItem { id: string; }
+        const items: ActionItem[] = [
+            { id: 'refresh',       label: '$(refresh) 刷新变量', description: '清除缓存并强制刷新' },
+            { id: '',              label: '', kind: vscode.QuickPickItemKind.Separator },
+            { id: 'addPage',       label: '$(add) 新建页面', description: '添加 Watch Page' },
+            { id: 'renamePage',    label: '$(edit) 重命名页面', description: '重命名当前页面' },
+            { id: 'deletePage',    label: '$(trash) 删除页面', description: '删除当前页面' },
+            { id: '',              label: '', kind: vscode.QuickPickItemKind.Separator },
+            { id: 'showChart',     label: '$(graph) 打开图表面板', description: '跳转到变量图表视图' },
+        ];
+
+        const selected = await vscode.window.showQuickPick(items, {
+            placeHolder: '更多操作',
+            title: 'Live Watch'
+        });
+
+        if (!selected) return;
+
+        const commandMap: Record<string, string> = {
+            refresh:    'stm32-live-watch.refreshVariables',
+            addPage:    'stm32-live-watch.addWatchPage',
+            renamePage: 'stm32-live-watch.renameWatchPage',
+            deletePage: 'stm32-live-watch.deleteWatchPage',
+            showChart:  'stm32-live-watch.showChartPanel',
+        };
+
+        const cmd = commandMap[selected.id];
+        if (cmd) {
+            void vscode.commands.executeCommand(cmd);
+        }
+    });
+
+    // 变量树页面管理命令
+    const addWatchPageCommand = vscode.commands.registerCommand('stm32-live-watch.addWatchPage', async () => {
+        await variableTreeDataProvider.addPage();
+    });
+
+    const renameWatchPageCommand = vscode.commands.registerCommand('stm32-live-watch.renameWatchPage', async () => {
+        await variableTreeDataProvider.renamePage();
+    });
+
+    const deleteWatchPageCommand = vscode.commands.registerCommand('stm32-live-watch.deleteWatchPage', async () => {
+        await variableTreeDataProvider.deletePage();
+    });
+
+    const prevWatchPageCommand = vscode.commands.registerCommand('stm32-live-watch.prevWatchPage', async () => {
+        await variableTreeDataProvider.switchToPrevPage();
+    });
+
+    const nextWatchPageCommand = vscode.commands.registerCommand('stm32-live-watch.nextWatchPage', async () => {
+        await variableTreeDataProvider.switchToNextPage();
+    });
+
+    // 图表页面管理命令
+    const addChartPageCommand = vscode.commands.registerCommand('stm32-live-watch.addChartPage', async () => {
+        await chartManagerInstance.addPage();
+    });
+
+    const renameChartPageCommand = vscode.commands.registerCommand('stm32-live-watch.renameChartPage', async () => {
+        await chartManagerInstance.renamePage();
+    });
+
+    const deleteChartPageCommand = vscode.commands.registerCommand('stm32-live-watch.deleteChartPage', async () => {
+        await chartManagerInstance.deletePage();
+    });
+
     panelTreeView = vscode.window.createTreeView('stm32-debug-variables-panel', {
         treeDataProvider: variableTreeDataProvider,
         dragAndDropController: variableTreeDataProvider,
@@ -240,6 +362,7 @@ export function activate(context: vscode.ExtensionContext) {
     });
 
     context.subscriptions.push(
+        pollScheduler,
         startServerCommand,
         stopServerCommand,
         generateElfCommand,
@@ -261,7 +384,17 @@ export function activate(context: vscode.ExtensionContext) {
         debugStartDisposable,
         debugTerminateDisposable,
         configChangeDisposable,
-        themeChangeDisposable
+        themeChangeDisposable,
+        moreActionsCommand,
+        addWatchPageCommand,
+        renameWatchPageCommand,
+        deleteWatchPageCommand,
+        prevWatchPageCommand,
+        nextWatchPageCommand,
+        addChartPageCommand,
+        renameChartPageCommand,
+        deleteChartPageCommand,
+        axfWatcher
     );
 }
 
@@ -366,6 +499,7 @@ async function ensureServerRunning(showSuccessMessage: boolean): Promise<void> {
             throw new Error('Server failed to respond to ping after 5 attempts');
         }
         await variableTreeDataProvider.loadRootVariables();
+        vscode.commands.executeCommand('setContext', 'stm32LiveWatch.serverRunning', true);
 
         if (showSuccessMessage) {
             vscode.window.showInformationMessage('STM32 Live Watch server started successfully');

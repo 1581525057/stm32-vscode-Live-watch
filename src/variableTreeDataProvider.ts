@@ -1,10 +1,10 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { getConfigValue } from './config';
-import { VariableInfo } from './models/variable';
+import { VariableInfo, ReadResult } from './models/variable';
 import { ServerClient } from './serverClient';
-
-const WATCHED_VARIABLES_KEY = 'stm32LiveWatch.watchedVariables';
-const LEGACY_WATCHED_VARIABLES_KEY = 'stm32DebugHelper.watchedVariables';
+import { PollScheduler } from './pollScheduler';
+import { WatchPage, loadWatchPages, persistWatchPages, MAX_PAGES, MAX_PAGE_NAME_LENGTH, createDefaultWatchPage } from './models/page';
 
 // 拖拽功能：自定义 MIME 类型和数据格式
 const DRAG_MIME_TYPE = 'application/vnd.stm32livewatch.variable';
@@ -28,21 +28,48 @@ export class VariableTreeItem extends vscode.TreeItem {
         this.tooltip = this.buildTooltip();
         this.contextValue = this.buildContextValue();
         this.command = this.buildCommand();
+        this.iconPath = VariableTreeItem.buildIcon(variableInfo);
+    }
 
-        // 图标优化：结构体/数组使用文件夹/模块图标，普通变量使用变量图标
-        if (variableInfo.hasChildren) {
-            this.iconPath = new vscode.ThemeIcon('symbol-class');
-        } else if (variableInfo.type === 'string') {
-            this.iconPath = new vscode.ThemeIcon('symbol-string');
-        } else {
-            this.iconPath = new vscode.ThemeIcon('symbol-variable');
+    // 容器符号映射：不同类型使用不同括号
+    private static containerSymbols: Record<string, [string, string]> = {
+        struct: ['{', '}'],
+        class:  ['{', '}'],
+        array:  ['[', ']'],
+        union:  ['{', '}'],
+    };
+
+    // 使用自定义 SVG 图标（resources/icons/），带语义化形状和配色
+    private static buildIcon(info: VariableInfo): vscode.ThemeIcon | { light: vscode.Uri; dark: vscode.Uri } {
+        const iconsRoot = path.join(__dirname, '..', 'resources', 'icons');
+        const iconMap: Record<string, string> = {
+            struct: 'struct.svg', class: 'class.svg', array: 'array.svg',
+            union:  'union.svg',  string: 'string.svg', enum: 'enum.svg',
+        };
+
+        if (info.hasChildren) {
+            const file = iconMap[info.type] || 'misc.svg';
+            return {
+                light: vscode.Uri.file(path.join(iconsRoot, file)),
+                dark:  vscode.Uri.file(path.join(iconsRoot, file)),
+            };
         }
+        if (info.type === 'string' || info.type === 'enum') {
+            return {
+                light: vscode.Uri.file(path.join(iconsRoot, iconMap[info.type])),
+                dark:  vscode.Uri.file(path.join(iconsRoot, iconMap[info.type])),
+            };
+        }
+        return {
+            light: vscode.Uri.file(path.join(iconsRoot, 'variable.svg')),
+            dark:  vscode.Uri.file(path.join(iconsRoot, 'variable.svg')),
+        };
     }
 
     private static buildLabel(variableInfo: VariableInfo, value: any): string {
         if (variableInfo.hasChildren) {
-            const containerValue = variableInfo.type === 'array' ? '[...]' : '{...}';
-            return `${variableInfo.name} ${containerValue}`;
+            const [open, close] = VariableTreeItem.containerSymbols[variableInfo.type] || ['{', '}'];
+            return `${variableInfo.name} ${open} ··· ${close}`;
         }
 
         if (value !== undefined && value !== null) {
@@ -53,8 +80,14 @@ export class VariableTreeItem extends vscode.TreeItem {
         return `${variableInfo.name} = ?`;
     }
 
+    // 描述区域：类型名 + Badge 标签（struct / array / class / union）
     private buildDescription(): string {
-        return this.variableInfo.typeName || this.variableInfo.type || '';
+        const typeName = this.variableInfo.typeName || '';
+        if (!this.variableInfo.hasChildren) {
+            return typeName;
+        }
+        const badge = this.variableInfo.type ? this.variableInfo.type.toUpperCase() : '';
+        return typeName && badge ? `${typeName}  ${badge}` : typeName || badge;
     }
 
     private buildTooltip(): vscode.MarkdownString {
@@ -151,16 +184,164 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
     private valueCache: Map<string, any> = new Map();
     private childrenCache: Map<string, VariableInfo[]> = new Map(); // 缓存 listChildren 结果，避免每 250ms 重复 RPC
 
-    private refreshTimer: NodeJS.Timeout | null = null;
+    // 多页面状态
+    private pages: WatchPage[] = [];
+    private activePageIndex = 0;
+
     private refreshInterval = 250;
-    private isRefreshing = false;
     private _disposed = false;
 
     constructor(
         private serverClient: ServerClient,
-        private workspaceState: vscode.Memento
+        private workspaceState: vscode.Memento,
+        private pollScheduler: PollScheduler
     ) {
         this.refreshInterval = getConfigValue<number>('refreshInterval', 250);
+    }
+
+    // 获取当前活动页面
+    get activePage(): WatchPage {
+        return this.pages[this.activePageIndex] || this.pages[0];
+    }
+
+    get pageCount(): number {
+        return this.pages.length;
+    }
+
+    get activePageDisplay(): string {
+        return `${this.activePageIndex + 1}/${this.pages.length}`;
+    }
+
+    // 切换到指定页面
+    async switchToPage(index: number): Promise<void> {
+        if (index < 0 || index >= this.pages.length || index === this.activePageIndex) {
+            return;
+        }
+        this.activePageIndex = index;
+        await this.loadCurrentPageVariables();
+        await persistWatchPages(this.workspaceState, this.pages, this.activePage.id);
+    }
+
+    async switchToPrevPage(): Promise<void> {
+        if (this.activePageIndex > 0) {
+            await this.switchToPage(this.activePageIndex - 1);
+        }
+    }
+
+    async switchToNextPage(): Promise<void> {
+        if (this.activePageIndex < this.pages.length - 1) {
+            await this.switchToPage(this.activePageIndex + 1);
+        }
+    }
+
+    // 添加新页面
+    async addPage(): Promise<void> {
+        if (this.pages.length >= MAX_PAGES) {
+            vscode.window.showWarningMessage(`最多支持 ${MAX_PAGES} 个页面`);
+            return;
+        }
+
+        const name = await vscode.window.showInputBox({
+            prompt: '输入页面名称',
+            placeHolder: '例如: Motor, Sensor, PID',
+            validateInput: (value) => {
+                if (!value.trim()) return '名称不能为空';
+                if (value.trim().length > MAX_PAGE_NAME_LENGTH) return `名称最长 ${MAX_PAGE_NAME_LENGTH} 个字符`;
+                return null;
+            }
+        });
+
+        if (!name) return;
+
+        const newPage = createDefaultWatchPage(name.trim());
+        this.pages.push(newPage);
+        this.activePageIndex = this.pages.length - 1;
+        this.rootVariables = [];
+        this.allVariables.clear();
+        this.valueCache.clear();
+        this.childrenCache.clear();
+        this.stopAutoRefresh();
+        await persistWatchPages(this.workspaceState, this.pages, newPage.id);
+        this.refresh();
+    }
+
+    // 重命名当前页面
+    async renamePage(): Promise<void> {
+        const page = this.activePage;
+        const name = await vscode.window.showInputBox({
+            prompt: '输入新的页面名称',
+            value: page.name,
+            validateInput: (value) => {
+                if (!value.trim()) return '名称不能为空';
+                if (value.trim().length > MAX_PAGE_NAME_LENGTH) return `名称最长 ${MAX_PAGE_NAME_LENGTH} 个字符`;
+                return null;
+            }
+        });
+
+        if (!name || name.trim() === page.name) return;
+
+        page.name = name.trim();
+        await persistWatchPages(this.workspaceState, this.pages, page.id);
+        this.refresh();
+    }
+
+    // 删除当前页面
+    async deletePage(): Promise<void> {
+        if (this.pages.length <= 1) {
+            vscode.window.showWarningMessage('至少保留一个页面');
+            return;
+        }
+
+        const page = this.activePage;
+        const confirm = await vscode.window.showWarningMessage(
+            `确定删除页面 "${page.name}" 及其所有监视变量？`,
+            '删除', '取消'
+        );
+
+        if (confirm !== '删除') return;
+
+        this.pages.splice(this.activePageIndex, 1);
+        if (this.activePageIndex >= this.pages.length) {
+            this.activePageIndex = this.pages.length - 1;
+        }
+        await this.loadCurrentPageVariables();
+        await persistWatchPages(this.workspaceState, this.pages, this.activePage.id);
+    }
+
+    // 加载当前页面的变量
+    private async loadCurrentPageVariables(): Promise<void> {
+        const page = this.activePage;
+        this.rootVariables = [];
+        this.allVariables.clear();
+        this.valueCache.clear();
+        this.childrenCache.clear();
+
+        if (page.watchedPaths.length === 0) {
+            this.stopAutoRefresh();
+            this.refresh();
+            return;
+        }
+
+        // 并行调用 describe
+        const results = await Promise.allSettled(
+            page.watchedPaths.map(p => this.serverClient.describe(p))
+        );
+
+        for (let i = 0; i < page.watchedPaths.length; i++) {
+            const result = results[i];
+            if (result.status === 'fulfilled' && result.value) {
+                this.rootVariables.push(result.value);
+                this.registerVariables([result.value]);
+            }
+        }
+
+        if (this.rootVariables.length > 0) {
+            this.startAutoRefresh();
+        } else {
+            this.stopAutoRefresh();
+        }
+
+        this.refresh();
     }
 
     refresh(): void {
@@ -255,9 +436,7 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
                 this.registerVariables([variableInfo]);
                 await this.persistWatchedPaths();
 
-                if (!this.refreshTimer) {
-                    this.startAutoRefresh();
-                }
+                this.startAutoRefresh();
                 this.refresh();
             }
         } catch (error) {
@@ -267,10 +446,7 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
 
     updateRefreshInterval(interval: number): void {
         this.refreshInterval = interval;
-        if (this.refreshTimer) {
-            this.stopAutoRefresh();
-            this.startAutoRefresh();
-        }
+        this.pollScheduler.updateInterval('variableTree', interval);
     }
 
     clearValueCache(): void {
@@ -278,62 +454,78 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
         this.refresh();
     }
 
+    /**
+     * 注册轮询源并启动调度器
+     */
     startAutoRefresh(): void {
-        this.stopAutoRefresh();
-        this.refreshTimer = setInterval(() => {
-            void this.refreshValues();
-        }, this.refreshInterval);
+        this.pollScheduler.registerSource({
+            name: 'variableTree',
+            getPaths: () => this.getPathsToRead(),
+            interval: this.refreshInterval,
+            onResults: (results) => this.processReadResults(results)
+        });
+        this.pollScheduler.start();
     }
 
+    /**
+     * 注销轮询源
+     */
     stopAutoRefresh(): void {
-        if (this.refreshTimer) {
-            clearInterval(this.refreshTimer);
-            this.refreshTimer = null;
+        this.pollScheduler.unregisterSource('variableTree');
+    }
+
+    /**
+     * 获取当前需要读取的变量路径列表
+     * 只返回可直接读写的普通变量（非结构体/数组容器）
+     */
+    private getPathsToRead(): string[] {
+        if (!this.serverClient.isRunning() || this.allVariables.size === 0) {
+            return [];
+        }
+        const paths: string[] = [];
+        for (const [path, variable] of this.allVariables) {
+            if (!variable.hasChildren) {
+                paths.push(path);
+            }
+        }
+        return paths;
+    }
+
+    /**
+     * 处理读取结果：更新缓存并在值变化时触发 UI 重绘
+     */
+    private processReadResults(results: ReadResult[]): void {
+        let hasChanges = false;
+        for (const result of results) {
+            const previousValue = this.valueCache.get(result.path);
+            if (previousValue !== result.value) {
+                hasChanges = true;
+            }
+            this.valueCache.set(result.path, result.value);
+        }
+        if (hasChanges) {
+            this.refresh();
         }
     }
 
     /**
-     * 核心优化：后台定时刷新变量值
+     * 一次性手动刷新（用于写入值后验证等场景）
      */
     private async refreshValues(): Promise<void> {
-        if (this.isRefreshing || !this.serverClient.isRunning() || this.allVariables.size === 0) {
+        if (!this.serverClient.isRunning() || this.allVariables.size === 0) {
             return;
         }
 
-        this.isRefreshing = true;
+        const pathsToRead = this.getPathsToRead();
+        if (pathsToRead.length === 0) {
+            return;
+        }
 
         try {
-            // 【关键修复 1】：严格过滤，只读取可直接读写的普通变量。
-            // 避免将 `sys_master.main_sensor.accel` 这种结构体路径发给后端导致后端跳过
-            const pathsToRead: string[] = [];
-            for (const [path, variable] of this.allVariables) {
-                if (!variable.hasChildren) {
-                    pathsToRead.push(path);
-                }
-            }
-
-            if (pathsToRead.length > 0) {
-                const results = await this.serverClient.readPaths(pathsToRead);
-                let hasChanges = false;
-
-                for (const result of results) {
-                    const previousValue = this.valueCache.get(result.path);
-                    if (previousValue !== result.value) {
-                        hasChanges = true;
-                    }
-                    this.valueCache.set(result.path, result.value);
-                }
-
-                // 【优化】：只有当数值真正发生变化时，才触发 UI 重绘，极大降低 CPU 占用
-                if (hasChanges) {
-                    this.refresh();
-                }
-            }
+            const results = await this.serverClient.readPaths(pathsToRead);
+            this.processReadResults(results);
         } catch (error) {
-            console.warn('Auto-refresh failed:', error);
-            // 可以在此处添加状态栏提示，不要使用弹窗打扰用户
-        } finally {
-            this.isRefreshing = false;
+            console.warn('Manual refresh failed:', error);
         }
     }
 
@@ -353,7 +545,9 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
     }
 
     private async persistWatchedPaths(): Promise<void> {
-        await this.workspaceState.update(WATCHED_VARIABLES_KEY, this.getWatchedPaths());
+        // 将当前根变量路径同步到活动页面
+        this.activePage.watchedPaths = this.rootVariables.map(v => v.path);
+        await persistWatchPages(this.workspaceState, this.pages, this.activePage.id);
     }
 
     private isRootVariablePath(path: string): boolean {
@@ -361,37 +555,13 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
     }
 
     async loadRootVariables(): Promise<void> {
-        const watchedPaths = this.workspaceState.get<string[]>(
-            WATCHED_VARIABLES_KEY,
-            this.workspaceState.get<string[]>(LEGACY_WATCHED_VARIABLES_KEY, [])
-        );
-        this.rootVariables = [];
-        this.allVariables.clear();
-        this.valueCache.clear();
-        this.childrenCache.clear();
+        // 加载页面数据（含旧版迁移）
+        const { pages, activeId } = loadWatchPages(this.workspaceState);
+        this.pages = pages;
+        this.activePageIndex = pages.findIndex(p => p.id === activeId);
+        if (this.activePageIndex < 0) this.activePageIndex = 0;
 
-        // 并行调用 describe，避免串行等待多个 RPC 请求
-        const results = await Promise.allSettled(
-            watchedPaths.map(path => this.serverClient.describe(path))
-        );
-
-        for (let i = 0; i < watchedPaths.length; i++) {
-            const result = results[i];
-            if (result.status === 'fulfilled' && result.value) {
-                this.rootVariables.push(result.value);
-                this.registerVariables([result.value]);
-            } else {
-                console.warn(`Failed to restore watched variable: ${watchedPaths[i]}`);
-            }
-        }
-
-        if (this.rootVariables.length > 0) {
-            this.startAutoRefresh();
-        } else {
-            this.stopAutoRefresh();
-        }
-
-        this.refresh();
+        await this.loadCurrentPageVariables();
     }
 
     async addVariable(path: string): Promise<void> {
@@ -409,11 +579,9 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
                 this.rootVariables.push(variableInfo);
                 this.registerVariables([variableInfo]);
                 await this.persistWatchedPaths();
-                
-                // 添加成功后如果还没有启动刷新，则启动
-                if (!this.refreshTimer) {
-                    this.startAutoRefresh();
-                }
+
+                // 添加成功后启动刷新（幂等，重复调用安全）
+                this.startAutoRefresh();
                 this.refresh();
             }
         } catch (error) {
@@ -546,10 +714,27 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
                 return [new WaitingTreeItem()];
             }
 
-            if (this.rootVariables.length === 0) {
-                return [new InfoTreeItem('No watched variables')];
+            const items: vscode.TreeItem[] = [];
+
+            // 页面信息项（如果有多个页面）
+            if (this.pages.length > 1) {
+                const pageInfo = new vscode.TreeItem(
+                    `${this.activePage.name} (${this.activePageIndex + 1}/${this.pages.length})`,
+                    vscode.TreeItemCollapsibleState.None
+                );
+                pageInfo.iconPath = new vscode.ThemeIcon('list-flat');
+                pageInfo.contextValue = 'pageInfo';
+                pageInfo.description = '';
+                items.push(pageInfo);
             }
-            return this.createTreeItems(this.rootVariables, true);
+
+            if (this.rootVariables.length === 0) {
+                items.push(new InfoTreeItem('No watched variables'));
+            } else {
+                items.push(...await this.createTreeItems(this.rootVariables, true));
+            }
+
+            return items;
         }
 
         if (element instanceof VariableTreeItem) {

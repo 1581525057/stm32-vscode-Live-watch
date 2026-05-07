@@ -25,3 +25,6 @@ resources/dist/**
 
 # 源 exe 已复制到 out/bin/，bin/ 目录不需要进入 VSIX
 bin/**
+
+# Claude Code 配置（含敏感 token）
+.claude/**

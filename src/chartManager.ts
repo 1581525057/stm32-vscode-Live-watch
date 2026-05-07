@@ -1,12 +1,13 @@
 // src/chartManager.ts
-// 图表数据管理器：变量列表、独立定时器、Webview 通信
+// 图表数据管理器：变量列表、统一轮询调度器、Webview 通信
 
 import * as vscode from 'vscode';
 import { getConfigValue } from './config';
 import { ServerClient } from './serverClient';
+import { ReadResult } from './models/variable';
+import { PollScheduler } from './pollScheduler';
 import { ChartViewProvider } from './chartPanel';
-
-const CHART_VARIABLES_KEY = 'stm32LiveWatch.chartVariables';
+import { ChartPage, loadChartPages, persistChartPages, MAX_PAGES, MAX_PAGE_NAME_LENGTH, createDefaultChartPage } from './models/page';
 
 const CHART_COLORS = [
     '#89b4fa', '#a6e3a1', '#f9e2af', '#f38ba8', '#cba6f7',
@@ -14,18 +15,17 @@ const CHART_COLORS = [
 ];
 
 export class ChartManager {
-    private chartVariables: string[] = [];
-    private collectTimer: NodeJS.Timeout | null = null;
+    private pages: ChartPage[] = [];
+    private activePageIndex = 0;
     private collectInterval = 100;
     private paused = false;
-    private isCollecting = false;
     private colorIndex = 0;
-    private colorMap = new Map<string, string>(); // path -> color，保证颜色分配一致
     private webviewProvider: ChartViewProvider | undefined;
 
     constructor(
         private serverClient: ServerClient,
-        private workspaceState: vscode.Memento
+        private workspaceState: vscode.Memento,
+        private pollScheduler: PollScheduler
     ) {
         this.collectInterval = getConfigValue<number>('chartRefreshInterval', 100);
     }
@@ -38,8 +38,127 @@ export class ChartManager {
         this.webviewProvider = undefined;
     }
 
+    // 当前活动页面快捷访问
+    get activePage(): ChartPage {
+        return this.pages[this.activePageIndex] || this.pages[0];
+    }
+
+    get pageCount(): number {
+        return this.pages.length;
+    }
+
+    get activePageIndexValue(): number {
+        return this.activePageIndex;
+    }
+
+    async switchToPage(index: number): Promise<void> {
+        if (index < 0 || index >= this.pages.length || index === this.activePageIndex) {
+            return;
+        }
+        this.activePageIndex = index;
+        await persistChartPages(this.workspaceState, this.pages, this.activePage.id);
+
+        // 通知 webview 切换页面
+        this.webviewProvider?.postMessage({
+            type: 'switchPage',
+            pageIndex: index,
+            pages: this.pages.map(p => ({ id: p.id, name: p.name }))
+        });
+
+        // 重新同步当前页面的变量
+        this.syncVariablesToWebview();
+    }
+
+    async addPage(): Promise<void> {
+        if (this.pages.length >= MAX_PAGES) {
+            vscode.window.showWarningMessage(`最多支持 ${MAX_PAGES} 个页面`);
+            return;
+        }
+
+        const name = await vscode.window.showInputBox({
+            prompt: '输入图表页面名称',
+            placeHolder: '例如: Motor, Sensor',
+            validateInput: (value) => {
+                if (!value.trim()) return '名称不能为空';
+                if (value.trim().length > MAX_PAGE_NAME_LENGTH) return `名称最长 ${MAX_PAGE_NAME_LENGTH} 个字符`;
+                return null;
+            }
+        });
+
+        if (!name) return;
+
+        const newPage = createDefaultChartPage(name.trim());
+        this.pages.push(newPage);
+        this.activePageIndex = this.pages.length - 1;
+        await persistChartPages(this.workspaceState, this.pages, newPage.id);
+
+        this.webviewProvider?.postMessage({
+            type: 'switchPage',
+            pageIndex: this.activePageIndex,
+            pages: this.pages.map(p => ({ id: p.id, name: p.name }))
+        });
+    }
+
+    async renamePage(): Promise<void> {
+        const page = this.activePage;
+        const name = await vscode.window.showInputBox({
+            prompt: '输入新的图表页面名称',
+            value: page.name,
+            validateInput: (value) => {
+                if (!value.trim()) return '名称不能为空';
+                if (value.trim().length > MAX_PAGE_NAME_LENGTH) return `名称最长 ${MAX_PAGE_NAME_LENGTH} 个字符`;
+                return null;
+            }
+        });
+
+        if (!name || name.trim() === page.name) return;
+
+        page.name = name.trim();
+        await persistChartPages(this.workspaceState, this.pages, page.id);
+
+        this.webviewProvider?.postMessage({
+            type: 'updatePageList',
+            pages: this.pages.map(p => ({ id: p.id, name: p.name }))
+        });
+    }
+
+    async deletePage(pageIndex?: number): Promise<void> {
+        if (this.pages.length <= 1) {
+            vscode.window.showWarningMessage('至少保留一个图表页面');
+            return;
+        }
+
+        const targetIndex = pageIndex !== undefined ? pageIndex : this.activePageIndex;
+        if (targetIndex < 0 || targetIndex >= this.pages.length) {
+            return;
+        }
+
+        const page = this.pages[targetIndex];
+        const confirm = await vscode.window.showWarningMessage(
+            `确定删除图表页面 "${page.name}" 及其所有变量？`,
+            '删除', '取消'
+        );
+
+        if (confirm !== '删除') return;
+
+        this.pages.splice(targetIndex, 1);
+        if (this.activePageIndex >= this.pages.length) {
+            this.activePageIndex = this.pages.length - 1;
+        } else if (this.activePageIndex > targetIndex) {
+            this.activePageIndex--;
+        }
+        await persistChartPages(this.workspaceState, this.pages, this.activePage.id);
+
+        this.webviewProvider?.postMessage({
+            type: 'switchPage',
+            pageIndex: this.activePageIndex,
+            pages: this.pages.map(p => ({ id: p.id, name: p.name }))
+        });
+    }
+
     public async addVariable(path: string): Promise<void> {
-        if (this.chartVariables.includes(path)) {
+        const page = this.activePage;
+        if (page.variablePaths.includes(path)) {
             return;
         }
 
@@ -51,12 +170,13 @@ export class ChartManager {
             return;
         }
 
-        this.chartVariables.push(path);
-        await this.persistVariables();
+        page.variablePaths.push(path);
 
         const color = CHART_COLORS[this.colorIndex % CHART_COLORS.length];
         this.colorIndex++;
-        this.colorMap.set(path, color);
+        page.colorMap[path] = color;
+
+        await persistChartPages(this.workspaceState, this.pages, page.id);
 
         this.webviewProvider?.postMessage({
             type: 'addVariable',
@@ -68,40 +188,46 @@ export class ChartManager {
     }
 
     public removeVariable(path: string): void {
-        this.chartVariables = this.chartVariables.filter(p => p !== path);
-        this.colorMap.delete(path);
-        void this.persistVariables();
+        const page = this.activePage;
+        page.variablePaths = page.variablePaths.filter(p => p !== path);
+        delete page.colorMap[path];
 
-        if (this.chartVariables.length === 0) {
+        void persistChartPages(this.workspaceState, this.pages, page.id);
+
+        if (page.variablePaths.length === 0) {
             this.stopCollecting();
         }
     }
 
     public getChartedVariables(): string[] {
-        return [...this.chartVariables];
+        return [...this.activePage.variablePaths];
     }
 
+    /**
+     * 注册图表轮询源并启动调度器
+     */
     public startCollecting(): void {
-        if (this.chartVariables.length === 0) return;
+        if (this.activePage.variablePaths.length === 0) return;
 
-        this.stopCollecting();
-        this.collectTimer = setInterval(() => {
-            void this.collectData();
-        }, this.collectInterval);
+        this.pollScheduler.registerSource({
+            name: 'chart',
+            getPaths: () => this.getPathsToCollect(),
+            interval: this.collectInterval,
+            onResults: (results) => this.processCollectedData(results)
+        });
+        this.pollScheduler.start();
     }
 
+    /**
+     * 注销图表轮询源
+     */
     public stopCollecting(): void {
-        if (this.collectTimer) {
-            clearInterval(this.collectTimer);
-            this.collectTimer = null;
-        }
+        this.pollScheduler.unregisterSource('chart');
     }
 
     public updateInterval(interval: number): void {
         this.collectInterval = interval;
-        if (this.collectTimer) {
-            this.startCollecting();
-        }
+        this.pollScheduler.updateInterval('chart', interval);
     }
 
     public setPaused(paused: boolean): void {
@@ -119,8 +245,9 @@ export class ChartManager {
     public handleWebviewMessage(msg: any): void {
         switch (msg.type) {
             case 'ready':
-                // Webview 就绪，同步当前变量列表
-                this.syncVariablesToWebview();
+                void this.restoreVariables().then(() => {
+                    this.syncVariablesToWebview();
+                });
                 break;
             case 'addVariable':
                 void this.addVariableFromInput();
@@ -140,20 +267,39 @@ export class ChartManager {
             case 'setInterval':
                 this.updateInterval(msg.value);
                 break;
+            case 'switchPage':
+                void this.switchToPage(msg.pageIndex);
+                break;
+            case 'addPage':
+                void this.addPage();
+                break;
+            case 'renamePage':
+                void this.renamePage();
+                break;
+            case 'deletePage':
+                void this.deletePage(msg.pageIndex);
+                break;
             default:
                 break;
         }
     }
 
     public async restoreVariables(): Promise<void> {
-        this.chartVariables = this.workspaceState.get<string[]>(CHART_VARIABLES_KEY, []);
-        // 同步 colorIndex，避免新添加变量时颜色与已恢复变量冲突
-        this.colorIndex = this.chartVariables.length;
-        // 为恢复的变量分配颜色（与 syncVariablesToWebview 一致）
-        this.chartVariables.forEach((path, i) => {
-            if (!this.colorMap.has(path)) {
-                this.colorMap.set(path, CHART_COLORS[i % CHART_COLORS.length]);
-            }
+        const { pages, activeId } = loadChartPages(this.workspaceState);
+        this.pages = pages;
+        this.activePageIndex = pages.findIndex(p => p.id === activeId);
+        if (this.activePageIndex < 0) this.activePageIndex = 0;
+
+        this.colorIndex = 0;
+        for (const page of this.pages) {
+            this.colorIndex += page.variablePaths.length;
+        }
+
+        // 通知 webview 页面列表
+        this.webviewProvider?.postMessage({
+            type: 'updatePageList',
+            pages: this.pages.map(p => ({ id: p.id, name: p.name })),
+            activeIndex: this.activePageIndex
         });
     }
 
@@ -165,45 +311,35 @@ export class ChartManager {
         this.stopCollecting();
     }
 
-    private async collectData(): Promise<void> {
-        if (this.isCollecting || this.paused || !this.serverClient.isRunning()) {
-            return;
+    /**
+     * 获取当前需要采集的变量路径列表
+     * 暂停、服务器未运行、面板不可见时返回空数组
+     */
+    private getPathsToCollect(): string[] {
+        if (this.paused || !this.serverClient.isRunning()) {
+            return [];
         }
-        if (this.chartVariables.length === 0) {
-            return;
-        }
-        // 面板不可见时跳过数据采集，节省后端请求
         if (!this.webviewProvider?.isVisible()) {
+            return [];
+        }
+        return [...this.activePage.variablePaths];
+    }
+
+    /**
+     * 处理采集到的数据并发送给 webview
+     */
+    private processCollectedData(results: ReadResult[]): void {
+        if (results.length === 0) {
             return;
         }
-
-        this.isCollecting = true;
-
-        try {
-            // 5 秒超时，防止数据采集请求永久挂起
-            let timeoutId: ReturnType<typeof setTimeout>;
-            let timedOut = false;
-            const timeoutPromise = new Promise<never>((_, reject) => {
-                timeoutId = setTimeout(() => { timedOut = true; reject(new Error('collectData timeout')); }, 5000);
-            });
-            const readPathsPromise = this.serverClient.readPaths(this.chartVariables)
-                .then(r => { clearTimeout(timeoutId!); return r; })
-                .catch(err => { clearTimeout(timeoutId!); if (!timedOut) { throw err; } return []; });
-            const results = await Promise.race([readPathsPromise, timeoutPromise]);
-            const data = results.map(r => ({
-                path: r.path,
-                value: typeof r.value === 'number' ? r.value : parseFloat(r.value) || 0
-            }));
-
-            this.webviewProvider?.postMessage({
-                type: 'dataUpdate',
-                data: data
-            });
-        } catch (error) {
-            console.error('Chart data collection error:', error);
-        } finally {
-            this.isCollecting = false;
-        }
+        const data = results.map(r => ({
+            path: r.path,
+            value: typeof r.value === 'number' ? r.value : parseFloat(r.value) || 0
+        }));
+        this.webviewProvider?.postMessage({
+            type: 'dataUpdate',
+            data: data
+        });
     }
 
     private async addVariableFromInput(): Promise<void> {
@@ -222,14 +358,14 @@ export class ChartManager {
         }
     }
 
-    private async persistVariables(): Promise<void> {
-        await this.workspaceState.update(CHART_VARIABLES_KEY, this.chartVariables);
-    }
-
     private syncVariablesToWebview(): void {
-        for (let i = 0; i < this.chartVariables.length; i++) {
-            const path = this.chartVariables[i];
-            const color = this.colorMap.get(path) || CHART_COLORS[i % CHART_COLORS.length];
+        const page = this.activePage;
+        // 先通知 webview 清除旧数据
+        this.webviewProvider?.postMessage({ type: 'clearPage' });
+
+        for (let i = 0; i < page.variablePaths.length; i++) {
+            const path = page.variablePaths[i];
+            const color = page.colorMap[path] || CHART_COLORS[i % CHART_COLORS.length];
             this.webviewProvider?.postMessage({
                 type: 'addVariable',
                 path: path,

@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>变量类型分辨度方案对比</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #1e1e1e;
+    color: #cccccc;
+    padding: 40px;
+  }
+  h1 { text-align: center; color: #e0e0e0; margin-bottom: 8px; font-size: 26px; }
+  .subtitle { text-align: center; color: #888; margin-bottom: 40px; font-size: 14px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; max-width: 1200px; margin: 0 auto; }
+  .card {
+    background: #252526;
+    border-radius: 10px;
+    border: 1px solid #3c3c3c;
+    overflow: hidden;
+  }
+  .card-header { padding: 16px 20px; border-bottom: 1px solid #3c3c3c; }
+  .card-label { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; margin-bottom: 8px; }
+  .card:nth-child(1) .card-label { background: #264f78; color: #75beff; }
+  .card:nth-child(2) .card-label { background: #1a5c3a; color: #6bc46d; }
+  .card:nth-child(3) .card-label { background: #5c3a1a; color: #e8a838; }
+  .card:nth-child(4) .card-label { background: #4a1a5c; color: #c586c0; }
+  .card-title { font-size: 16px; font-weight: 600; color: #e0e0e0; margin-bottom: 4px; }
+  .card-desc { font-size: 12px; color: #999; line-height: 1.5; }
+
+  .tree { padding: 8px 0; font-size: 13px; }
+  .tree-row {
+    display: flex;
+    align-items: center;
+    height: 24px;
+    padding: 0 12px;
+    gap: 6px;
+  }
+  .tree-row:hover { background: #2a2d2e; }
+  .indent { width: 20px; flex-shrink: 0; }
+  .expand { width: 14px; text-align: center; color: #888; font-size: 10px; flex-shrink: 0; }
+  .icon { width: 16px; text-align: center; font-size: 13px; flex-shrink: 0; }
+  .label { flex: 1; color: #d4d4d4; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .badge { font-size: 10px; padding: 0 5px; border-radius: 3px; font-weight: 600; flex-shrink: 0; height: 16px; line-height: 16px; }
+  .type-tag { font-size: 11px; color: #888; flex-shrink: 0; margin-left: auto; }
+  .value { color: #ce9178; }
+
+  /* 类型颜色 */
+  .t-struct { color: #4ec9b0; }    /* 薄荷绿 - 结构体 */
+  .t-class { color: #e8c96d; }     /* 琥珀黄 - 类 */
+  .t-array { color: #c586c0; }     /* 紫色 - 数组 */
+  .t-union { color: #569cd6; }     /* 蓝色 - 联合体 */
+  .t-string { color: #ce9178; }    /* 棕橙 - 字符串 */
+  .t-var { color: #9cdcfe; }       /* 浅蓝 - 普通变量 */
+
+  .b-struct { background: rgba(78,201,176,0.15); color: #4ec9b0; }
+  .b-class { background: rgba(232,201,109,0.15); color: #e8c96d; }
+  .b-array { background: rgba(197,134,192,0.15); color: #c586c0; }
+  .b-union { background: rgba(86,156,214,0.15); color: #569cd6; }
+
+  .prefix { font-weight: 700; font-size: 11px; width: 16px; text-align: center; flex-shrink: 0; }
+
+  /* 最终推荐 */
+  .recommend {
+    max-width: 1200px;
+    margin: 40px auto 0;
+    background: #252526;
+    border-radius: 10px;
+    border: 1px solid #007acc;
+    box-shadow: 0 0 0 1px #007acc;
+    overflow: hidden;
+  }
+  .recommend .rec-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid #3c3c3c;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .recommend .rec-header h2 { font-size: 16px; color: #e0e0e0; }
+  .recommend .rec-tag { background: #007acc; color: #fff; font-size: 10px; padding: 2px 8px; border-radius: 4px; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<h1>变量类型「分辨度」增强方案</h1>
+<p class="subtitle">让结构体、类、数组在树视图中一目了然</p>
+
+<div class="grid">
+
+  <!-- 方案 1: 彩色图标 -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-label">方案 1</div>
+      <div class="card-title">语义化图标 + 内置配色</div>
+      <div class="card-desc">利用 VS Code ThemeIcon 的内置语义色，不同类型使用不同图标名称。零额外代码，纯原生风格。</div>
+    </div>
+    <div class="tree">
+      <div class="tree-row">
+        <span class="expand">▼</span>
+        <span class="icon t-struct">⬡</span>
+        <span class="label">sensor_data { ... }</span>
+        <span class="type-tag">SensorData_t</span>
+      </div>
+      <div class="tree-row"><span class="indent"></span><span class="expand"></span><span class="icon t-var">○</span><span class="label">temperature = <span class="value">25.6</span></span><span class="type-tag">float</span></div>
+      <div class="tree-row"><span class="indent"></span><span class="expand"></span><span class="icon t-var">○</span><span class="label">humidity = <span class="value">60</span></span><span class="type-tag">uint16_t</span></div>
+      <div class="tree-row">
+        <span class="expand">▼</span>
+        <span class="icon t-array">⧫</span>
+        <span class="label">buffer [ ... ]</span>
+        <span class="type-tag">uint8_t[64]</span>
+      </div>
+      <div class="tree-row"><span class="indent"></span><span class="expand"></span><span class="icon t-var">○</span><span class="label">[0] = <span class="value">0xFF</span></span><span class="type-tag">uint8_t</span></div>
+      <div class="tree-row"><span class="indent"></span><span class="expand"></span><span class="icon t-var">○</span><span class="label">[1] = <span class="value">0x3A</span></span><span class="type-tag">uint8_t</span></div>
+      <div class="tree-row">
+        <span class="expand">▼</span>
+        <span class="icon t-class">◈</span>
+        <span class="label">motor_ctrl { ... }</span>
+        <span class="type-tag">MotorController</span>
+      </div>
+      <div class="tree-row"><span class="indent"></span><span class="expand"></span><span class="icon t-var">○</span><span class="label">speed = <span class="value">1500</span></span><span class="type-tag">int32_t</span></div>
+      <div class="tree-row">
+        <span class="expand">▼</span>
+        <span class="icon t-union">◇</span>
+        <span class="label">data_reg { ... }</span>
+        <span class="type-tag">DataReg_u</span>
+      </div>
+      <div class="tree-row"><span class="indent"></span><span class="expand"></span><span class="icon t-var">○</span><span class="label">raw = <span class="value">0xABCD</span></span><span class="type-tag">uint32_t</span></div>
+    </div>
+  </div>
+
+  <!-- 方案 2: Badge 标签 -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-label">方案 2</div>
+      <div class="card-title">类型 Badge 标签</div>
+      <div class="card-desc">在变量名后面加一个彩色小标签，显示 struct / array / class。最直观，但占用额外水平空间。</div>
+    </div>
+    <div class="tree">
+      <div class="tree-row">
+        <span class="expand">▼</span>
+        <span class="icon t-struct">⬡</span>
+        <span class="label">sensor_data { ... }</span>
+        <span class="badge b-struct">struct</span>
+        <span class="type-tag">SensorData_t</span>
+      </div>
+      <div class="tree-row"><span class="indent"></span><span class="expand"></span><span class="icon t-var">○</span><span class="label">temperature = <span class="value">25.6</span></span><span class="type-tag">float</span></div>
+      <div class="tree-row"><span class="indent"></span><span class="expand"></span><span class="icon t-var">○</span><span class="label">humidity = <span class="value">60</span></span><span class="type-tag">uint16_t</span></div>
+      <div class="tree-row">
+        <span class="expand">▼</span>
+        <span class="icon t-array">⧫</span>
+        <span class="label">buffer [ ... ]</span>
+        <span class="badge b-array">array</span>
+        <span class="type-tag">uint8_t[64]</span>
+      </div>
+      <div class="tree-row"><span class="indent"></span><span class="expand"></span><span class="icon t-var">○</span><span class="label">[0] = <span class="value">0xFF</span></span><span class="type-tag">uint8_t</span></div>
+      <div class="tree-row"><span class="indent"></span><span class="expand"></span><span class="icon t-var">○</span><span class="label">[1] = <span class="value">0x3A</span></span><span class="type-tag">uint8_t</span></div>
+      <div class="tree-row">
+        <span class="expand">▼</span>
+        <span class="icon t-class">◈</span>
+        <span class="label">motor_ctrl { ... }</span>
+        <span class="badge b-class">class</span>
+        <span class="type-tag">MotorController</span>
+      </div>
+      <div class="tree-row"><span class="indent"></span><span class="expand"></span><span class="icon t-var">○</span><span class="label">speed = <span class="value">1500</span></span><span class="type-tag">int32_t</span></div>
+      <div class="tree-row">
+        <span class="expand">▼</span>
+        <span class="icon t-union">◇</span>
+        <span class="label">data_reg { ... }</span>
+        <span class="badge b-union">union</span>
+        <span class="type-tag">DataReg_u</span>
+      </div>
+      <div class="tree-row"><span class="indent"></span><span class="expand"></span><span class="icon t-var">○</span><span class="label">raw = <span class="value">0xABCD</span></span><span class="type-tag">uint32_t</span></div>
+    </div>
+  </div>
+
+  <!-- 方案 3: 彩色前缀符号 -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-label">方案 3</div>
+      <div class="card-title">符号前缀 + 配色</div>
+      <div class="card-desc">用独特的符号前缀替代图标：{ } 结构体、[ ] 数组、&lt;&gt; 类、# 联合体。紧凑且辨识度高。</div>
+    </div>
+    <div class="tree">
+      <div class="tree-row">
+        <span class="expand">▼</span>
+        <span class="prefix t-struct">{</span>
+        <span class="label">sensor_data</span>
+        <span class="type-tag">SensorData_t</span>
+      </div>
+      <div class="tree-row"><span class="indent"></span><span class="expand"></span><span class="prefix t-var">·</span><span class="label">temperature = <span class="value">25.6</span></span><span class="type-tag">float</span></div>
+      <div class="tree-row"><span class="indent"></span><span class="expand"></span><span class="prefix t-var">·</span><span class="label">humidity = <span class="value">60</span></span><span class="type-tag">uint16_t</span></div>
+      <div class="tree-row">
+        <span class="expand">▼</span>
+        <span class="prefix t-array">[</span>
+        <span class="label">buffer</span>
+        <span class="type-tag">uint8_t[64]</span>
+      </div>
+      <div class="tree-row"><span class="indent"></span><span class="expand"></span><span class="prefix t-var">·</span><span class="label">[0] = <span class="value">0xFF</span></span><span class="type-tag">uint8_t</span></div>
+      <div class="tree-row"><span class="indent"></span><span class="expand"></span><span class="prefix t-var">·</span><span class="label">[1] = <span class="value">0x3A</span></span><span class="type-tag">uint8_t</span></div>
+      <div class="tree-row">
+        <span class="expand">▼</span>
+        <span class="prefix t-class">&lt;</span>
+        <span class="label">motor_ctrl</span>
+        <span class="type-tag">MotorController</span>
+      </div>
+      <div class="tree-row"><span class="indent"></span><span class="expand"></span><span class="prefix t-var">·</span><span class="label">speed = <span class="value">1500</span></span><span class="type-tag">int32_t</span></div>
+      <div class="tree-row">
+        <span class="expand">▼</span>
+        <span class="prefix t-union">#</span>
+        <span class="label">data_reg</span>
+        <span class="type-tag">DataReg_u</span>
+      </div>
+      <div class="tree-row"><span class="indent"></span><span class="expand"></span><span class="prefix t-var">·</span><span class="label">raw = <span class="value">0xABCD</span></span><span class="type-tag">uint32_t</span></div>
+    </div>
+  </div>
+
+  <!-- 方案 4: 混合方案 -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-label">方案 4</div>
+      <div class="card-title">图标 + 容器符号增强</div>
+      <div class="card-desc">保留语义图标，同时用彩色的容器符号 { } [ ] &lt;&gt; 替代原来的 { ... } [ ... ]。兼顾美观与信息量。</div>
+    </div>
+    <div class="tree">
+      <div class="tree-row">
+        <span class="expand">▼</span>
+        <span class="icon t-struct">⬡</span>
+        <span class="label">sensor_data <span class="t-struct">{ ··· }</span></span>
+        <span class="type-tag">SensorData_t</span>
+      </div>
+      <div class="tree-row"><span class="indent"></span><span class="expand"></span><span class="icon t-var">○</span><span class="label">temperature = <span class="value">25.6</span></span><span class="type-tag">float</span></div>
+      <div class="tree-row"><span class="indent"></span><span class="expand"></span><span class="icon t-var">○</span><span class="label">humidity = <span class="value">60</span></span><span class="type-tag">uint16_t</span></div>
+      <div class="tree-row">
+        <span class="expand">▼</span>
+        <span class="icon t-array">⧫</span>
+        <span class="label">buffer <span class="t-array">[ ··· ]</span></span>
+        <span class="type-tag">uint8_t[64]</span>
+      </div>
+      <div class="tree-row"><span class="indent"></span><span class="expand"></span><span class="icon t-var">○</span><span class="label">[0] = <span class="value">0xFF</span></span><span class="type-tag">uint8_t</span></div>
+      <div class="tree-row"><span class="indent"></span><span class="expand"></span><span class="icon t-var">○</span><span class="label">[1] = <span class="value">0x3A</span></span><span class="type-tag">uint8_t</span></div>
+      <div class="tree-row">
+        <span class="expand">▼</span>
+        <span class="icon t-class">◈</span>
+        <span class="label">motor_ctrl <span class="t-class">{ ··· }</span></span>
+        <span class="type-tag">MotorController</span>
+      </div>
+      <div class="tree-row"><span class="indent"></span><span class="expand"></span><span class="icon t-var">○</span><span class="label">speed = <span class="value">1500</span></span><span class="type-tag">int32_t</span></div>
+      <div class="tree-row">
+        <span class="expand">▼</span>
+        <span class="icon t-union">◇</span>
+        <span class="label">data_reg <span class="t-union">{ ··· }</span></span>
+        <span class="type-tag">DataReg_u</span>
+      </div>
+      <div class="tree-row"><span class="indent"></span><span class="expand"></span><span class="icon t-var">○</span><span class="label">raw = <span class="value">0xABCD</span></span><span class="type-tag">uint32_t</span></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- 最终推荐 -->
+<div class="recommend">
+  <div class="rec-header">
+    <h2>推荐：方案 1 + 方案 4 组合</h2>
+    <span class="rec-tag">最佳实践</span>
+  </div>
+  <div style="padding:20px;font-size:13px;color:#bbb;line-height:2">
+    <p><strong>图标层：</strong>用 VS Code ThemeIcon 内置语义色区分类型（struct 青色、class 黄色、array 紫色、union 蓝色），零额外渲染开销。</p>
+    <p><strong>标签层：</strong>容器符号 { } [ ] 用对应类型色着色，替代原来的灰色 { ... } [ ... ]，让颜色从图标延伸到文字，形成视觉连续性。</p>
+    <p><strong>实现方式：</strong>在 <code>VariableTreeItem.buildLabel()</code> 中根据 <code>variableInfo.type</code> 选择着色的容器符号；在构造函数中根据 type 选择对应 ThemeIcon。</p>
+    <p><strong>代码改动：</strong>仅修改 <code>src/variableTreeDataProvider.ts</code> 的 <code>VariableTreeItem</code> 类，约 20 行改动。</p>
+  </div>
+</div>
+
+</body>
+</html>

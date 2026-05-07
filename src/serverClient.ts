@@ -10,8 +10,15 @@ export class ServerClient {
     private buffer = '';
     private activeRequest: { resolve: Function; reject: Function } | null = null;
     private requestQueue: Promise<any> = Promise.resolve();
+    private _onClose: (() => void) | null = null;
+    private stoppingIntentionally = false;
 
     constructor(private readonly serverScriptPath: string) {}
+
+    /** 注册服务器关闭回调（进程意外退出时触发） */
+    onClose(callback: () => void): void {
+        this._onClose = callback;
+    }
 
     private getServerExecutable(): string | null {
         const platform = process.platform;
@@ -107,6 +114,10 @@ export class ServerClient {
                     this.activeRequest = null;
                 }
                 this.process = null;
+                // 仅在非主动停止时触发关闭回调（防止重启期间误触发 UI 重置）
+                if (!this.stoppingIntentionally && this._onClose) {
+                    this._onClose();
+                }
             });
 
             setTimeout(() => resolve(), 50);
@@ -210,10 +221,50 @@ export class ServerClient {
     }
 
     stop(): void {
-        if (this.process) {
-            this.process.kill();
-            this.process = null;
-        }
+        this.stopAsync().catch(() => {});
+    }
+
+    /** 异步停止服务器，等待进程真正退出后返回 */
+    stopAsync(): Promise<void> {
+        return new Promise<void>((resolve) => {
+            const proc = this.process;
+            if (!proc) {
+                this.cleanupAfterStop();
+                resolve();
+                return;
+            }
+
+            // 标记为主动停止，防止 close 回调触发 _onClose
+            this.stoppingIntentionally = true;
+
+            // 超时保护：最多等 3 秒
+            // 保存 timeout ID，以便 close 回调中清除，防止旧超时误置新 stop 的标志
+            const timeoutId = setTimeout(() => {
+                // 仅当进程仍为当前 proc 时才清理，避免影响新 stop 流程
+                if (this.process === proc) {
+                    this.process = null;
+                    this.cleanupAfterStop();
+                    this.stoppingIntentionally = false;
+                }
+                resolve();
+            }, 3000);
+
+            // 监听进程退出事件
+            proc.once('close', () => {
+                // close 事件先于超时触发时，清除超时定时器
+                clearTimeout(timeoutId);
+                this.process = null;
+                this.cleanupAfterStop();
+                this.stoppingIntentionally = false;
+                resolve();
+            });
+
+            // 发送终止信号
+            proc.kill();
+        });
+    }
+
+    private cleanupAfterStop(): void {
         // 拒绝当前活跃请求，防止调用方 Promise 永久挂起
         if (this.activeRequest) {
             this.activeRequest.reject(new Error('Server stopped'));

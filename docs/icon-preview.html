@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>STM32 Live Watch - 变量类型图标预览</title>
+    <style>
+        /* ===== 全局样式 ===== */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background-color: #1e1e2e;
+            color: #cdd6f4;
+            font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+            padding: 32px;
+            min-height: 100vh;
+        }
+
+        /* ===== 页面标题 ===== */
+        .page-header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        .page-header h1 {
+            font-size: 28px;
+            font-weight: 600;
+            color: #cdd6f4;
+            margin-bottom: 8px;
+        }
+
+        .page-header p {
+            font-size: 14px;
+            color: #a6adc8;
+        }
+
+        /* ===== 配色方案区域 ===== */
+        .color-scheme {
+            margin-bottom: 48px;
+            background: #181825;
+            border-radius: 12px;
+            padding: 28px 32px;
+            border: 1px solid #313244;
+        }
+
+        .color-scheme h2 {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 20px;
+            color: #cdd6f4;
+        }
+
+        .color-scheme h2 span {
+            font-size: 13px;
+            font-weight: 400;
+            color: #6c7086;
+            margin-left: 12px;
+        }
+
+        /* ===== 图标网格布局 ===== */
+        .icon-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 16px;
+        }
+
+        /* ===== 单个图标卡片 ===== */
+        .icon-card {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            background: #1e1e2e;
+            border: 1px solid #313244;
+            border-radius: 8px;
+            padding: 16px 20px;
+            transition: border-color 0.2s ease;
+        }
+
+        .icon-card:hover {
+            border-color: #585b70;
+        }
+
+        /* ===== 图标预览区域 ===== */
+        .icon-preview {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-shrink: 0;
+        }
+
+        .icon-preview .size-16 {
+            width: 16px;
+            height: 16px;
+        }
+
+        .icon-preview .size-32 {
+            width: 32px;
+            height: 32px;
+        }
+
+        .icon-preview .size-label {
+            font-size: 10px;
+            color: #6c7086;
+            text-align: center;
+            margin-top: 2px;
+        }
+
+        .preview-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        /* ===== 图标信息 ===== */
+        .icon-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .icon-info .type-name {
+            font-size: 14px;
+            font-weight: 600;
+            color: #cdd6f4;
+            margin-bottom: 4px;
+        }
+
+        .icon-info .type-shape {
+            font-size: 12px;
+            color: #6c7086;
+        }
+
+        /* ===== 复制按钮 ===== */
+        .copy-btn {
+            background: #313244;
+            color: #cdd6f4;
+            border: 1px solid #45475a;
+            border-radius: 6px;
+            padding: 6px 12px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+
+        .copy-btn:hover {
+            background: #45475a;
+            border-color: #585b70;
+        }
+
+        .copy-btn.copied {
+            background: #a6e3a1;
+            color: #1e1e2e;
+            border-color: #a6e3a1;
+        }
+
+        /* ===== 底部复制全部区域 ===== */
+        .footer {
+            margin-top: 48px;
+            text-align: center;
+            padding: 24px;
+            background: #181825;
+            border-radius: 12px;
+            border: 1px solid #313244;
+        }
+
+        .footer p {
+            font-size: 13px;
+            color: #6c7086;
+            margin-bottom: 16px;
+        }
+
+        .footer-btn-group {
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .footer-btn {
+            background: #45475a;
+            color: #cdd6f4;
+            border: 1px solid #585b70;
+            border-radius: 8px;
+            padding: 10px 20px;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .footer-btn:hover {
+            background: #585b70;
+        }
+
+        .footer-btn.copied {
+            background: #a6e3a1;
+            color: #1e1e2e;
+            border-color: #a6e3a1;
+        }
+
+        /* ===== 复制成功提示 ===== */
+        .toast {
+            position: fixed;
+            bottom: 32px;
+            left: 50%;
+            transform: translateX(-50%) translateY(80px);
+            background: #a6e3a1;
+            color: #1e1e2e;
+            padding: 10px 24px;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            opacity: 0;
+            transition: all 0.3s ease;
+            pointer-events: none;
+            z-index: 1000;
+        }
+
+        .toast.show {
+            opacity: 1;
+            transform: translateX(-50%) translateY(0);
+        }
+    </style>
+</head>
+<body>
+
+    <!-- 页面标题 -->
+    <div class="page-header">
+        <h1>STM32 Live Watch - 变量类型图标预览</h1>
+        <p>7 种变量类型的几何填充风格 SVG 图标 / 3 套配色方案 / 16x16 与 32x32 预览</p>
+    </div>
+
+    <!-- 图标数据定义（JavaScript 生成） -->
+    <div id="schemes-container"></div>
+
+    <!-- 底部操作区域 -->
+    <div class="footer">
+        <p>点击"复制 SVG"按钮可复制单个图标的 SVG 代码</p>
+        <div class="footer-btn-group">
+            <button class="footer-btn" onclick="copyAllSVGs('schemeA')">复制方案 A 全部 SVG</button>
+            <button class="footer-btn" onclick="copyAllSVGs('schemeB')">复制方案 B 全部 SVG</button>
+            <button class="footer-btn" onclick="copyAllSVGs('schemeC')">复制方案 C 全部 SVG</button>
+        </div>
+    </div>
+
+    <!-- 复制成功提示 -->
+    <div class="toast" id="toast">已复制到剪贴板</div>
+
+    <script>
+        // ===== 配色方案数据 =====
+        const colorSchemes = {
+            schemeA: {
+                name: '方案 A：鲜明现代',
+                desc: 'Vibrant & Modern',
+                colors: {
+                    struct:   '#22D3EE',
+                    class:    '#FBBF24',
+                    array:    '#A78BFA',
+                    union:    '#34D399',
+                    string:   '#FB923C',
+                    enum:     '#F87171',
+                    variable: '#60A5FA'
+                }
+            },
+            schemeB: {
+                name: '方案 B：柔和优雅',
+                desc: 'Soft & Elegant',
+                colors: {
+                    struct:   '#67E8F9',
+                    class:    '#FDE68A',
+                    array:    '#C4B5FD',
+                    union:    '#6EE7B7',
+                    string:   '#FDBA74',
+                    enum:     '#FCA5A5',
+                    variable: '#93C5FD'
+                }
+            },
+            schemeC: {
+                name: '方案 C：高对比度',
+                desc: 'High Contrast',
+                colors: {
+                    struct:   '#06B6D4',
+                    class:    '#D97706',
+                    array:    '#7C3AED',
+                    union:    '#059669',
+                    string:   '#EA580C',
+                    enum:     '#DC2626',
+                    variable: '#2563EB'
+                }
+            }
+        };
+
+        // ===== 图标类型定义 =====
+        // 每种类型对应一种几何形状，viewBox 为 16x16
+        const iconTypes = [
+            {
+                key: 'struct',
+                name: 'struct',
+                shape: '菱形 (Diamond)',
+                // 菱形：用 polygon 绘制
+                getPath: (color) =>
+                    `<polygon points="8,1 15,8 8,15 1,8" fill="${color}" />`
+            },
+            {
+                key: 'class',
+                name: 'class',
+                shape: '圆角正方形 (Rounded Square)',
+                // 圆角矩形：用 rect 绘制，rx/ry 控制圆角
+                getPath: (color) =>
+                    `<rect x="2" y="2" width="12" height="12" rx="3" ry="3" fill="${color}" />`
+            },
+            {
+                key: 'array',
+                name: 'array',
+                shape: '三角形 (Triangle)',
+                // 三角形：用 polygon 绘制
+                getPath: (color) =>
+                    `<polygon points="8,2 14,14 2,14" fill="${color}" />`
+            },
+            {
+                key: 'union',
+                name: 'union',
+                shape: '六边形 (Hexagon)',
+                // 六边形：用 polygon 绘制六个顶点
+                getPath: (color) =>
+                    `<polygon points="8,1 14,4.5 14,11.5 8,15 2,11.5 2,4.5" fill="${color}" />`
+            },
+            {
+                key: 'string',
+                name: 'string',
+                shape: '波浪形 (Wave)',
+                // 波浪形：用 path 绘制正弦曲线封闭区域
+                getPath: (color) =>
+                    `<path d="M1,8 C3,4 5,4 8,8 C11,12 13,12 15,8 L15,10 C13,14 11,14 8,10 C5,6 3,6 1,10 Z" fill="${color}" />`
+            },
+            {
+                key: 'enum',
+                name: 'enum',
+                shape: '实心圆 (Solid Circle)',
+                // 实心圆：用 circle 绘制
+                getPath: (color) =>
+                    `<circle cx="8" cy="8" r="6" fill="${color}" />`
+            },
+            {
+                key: 'variable',
+                name: 'variable',
+                shape: '空心圆环 (Ring / Hollow Circle)',
+                // 空心圆环：用 circle 绘制，仅描边无填充
+                getPath: (color) =>
+                    `<circle cx="8" cy="8" r="5.5" fill="none" stroke="${color}" stroke-width="2" />`
+            }
+        ];
+
+        // ===== 生成单个 SVG 字符串 =====
+        function generateSVG(type, color, size) {
+            return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 16 16">${type.getPath(color)}</svg>`;
+        }
+
+        // ===== 显示提示 =====
+        function showToast(message) {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.classList.add('show');
+            setTimeout(() => toast.classList.remove('show'), 2000);
+        }
+
+        // ===== 复制文本到剪贴板 =====
+        async function copyToClipboard(text) {
+            try {
+                await navigator.clipboard.writeText(text);
+                return true;
+            } catch {
+                // 降级方案
+                const textarea = document.createElement('textarea');
+                textarea.value = text;
+                textarea.style.position = 'fixed';
+                textarea.style.opacity = '0';
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textarea);
+                return true;
+            }
+        }
+
+        // ===== 复制单个图标 SVG =====
+        async function copySingleSVG(schemeKey, iconKey) {
+            const scheme = colorSchemes[schemeKey];
+            const type = iconTypes.find(t => t.key === iconKey);
+            const color = scheme.colors[iconKey];
+            const svg = generateSVG(type, color, 16);
+
+            await copyToClipboard(svg);
+            showToast(`已复制 ${iconKey} 的 SVG 代码`);
+        }
+
+        // ===== 复制整套方案的全部 SVG =====
+        async function copyAllSVGs(schemeKey) {
+            const scheme = colorSchemes[schemeKey];
+            const allSVGs = iconTypes.map(type => {
+                const color = scheme.colors[type.key];
+                return `<!-- ${type.name} (${type.shape}) -->\n${generateSVG(type, color, 16)}`;
+            }).join('\n\n');
+
+            await copyToClipboard(allSVGs);
+            showToast(`已复制${scheme.name}的全部 SVG 代码`);
+        }
+
+        // ===== 渲染页面 =====
+        function renderPage() {
+            const container = document.getElementById('schemes-container');
+            let html = '';
+
+            // 遍历三套配色方案
+            for (const [schemeKey, scheme] of Object.entries(colorSchemes)) {
+                html += `
+                <div class="color-scheme">
+                    <h2>${scheme.name} <span>${scheme.desc}</span></h2>
+                    <div class="icon-grid">`;
+
+                // 遍历七种图标类型
+                for (const type of iconTypes) {
+                    const color = scheme.colors[type.key];
+                    const svg16 = generateSVG(type, color, 16);
+                    const svg32 = generateSVG(type, color, 32);
+
+                    html += `
+                        <div class="icon-card">
+                            <!-- 图标预览：16x16 和 32x32 -->
+                            <div class="icon-preview">
+                                <div class="preview-item">
+                                    ${svg16}
+                                    <div class="size-label">16px</div>
+                                </div>
+                                <div class="preview-item">
+                                    ${svg32}
+                                    <div class="size-label">32px</div>
+                                </div>
+                            </div>
+                            <!-- 类型信息 -->
+                            <div class="icon-info">
+                                <div class="type-name" style="color: ${color}">${type.name}</div>
+                                <div class="type-shape">${type.shape}</div>
+                            </div>
+                            <!-- 复制按钮 -->
+                            <button class="copy-btn" onclick="copySingleSVG('${schemeKey}', '${type.key}')">复制 SVG</button>
+                        </div>`;
+                }
+
+                html += `
+                    </div>
+                </div>`;
+            }
+
+            container.innerHTML = html;
+        }
+
+        // ===== 页面加载后渲染 =====
+        renderPage();
+    </script>
+</body>
+</html>
