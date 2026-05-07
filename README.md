@@ -3,7 +3,7 @@
 **中文** | [English](README_EN.md)
 
 发布者：ciyueYe  
-版本：3.5.0  
+版本：3.7.0  
 适用场景：VS Code + EIDE + Cortex-Debug + OpenOCD 的 STM32 实时变量观察与图表可视化
 
 `stm32-vscode-Live-watch` 是一个面向 STM32 调试阶段的 VS Code 扩展。它不会替代调试器，而是在现有 EIDE、Cortex-Debug、OpenOCD 工作流旁边增加一个更直接的实时变量观察界面：你编译工程、启动调试、添加变量，扩展负责从 ELF 调试信息里解析变量地址，并通过 OpenOCD 读取目标板内存。
@@ -67,6 +67,16 @@
 - **代码去重**：`read_memory_bytes` 复用 `read_raw_bytes`，消除重复的十六进制解析逻辑。
 - **LocationExpr 支持**：`_parse_location_address` 新增 `LocationExpr` 包装和 `.debug_loc` 位置列表解析，兼容 AC5 DWARF 编码。
 - **诊断命令**：新增 `Dump DWARF Variables` 命令和 `--verbose` 启动参数，便于排查变量解析问题。
+
+3.7.0 性能优化、变量图标重设计与 Bug 修复：
+
+- **统一轮询调度器**：新增 `PollScheduler`，将变量树（250ms）和图表（100ms）的轮询合并为一次 `readPaths` 请求，消除争抢，刷新更流畅。
+- **DWARF 类型解析缓存**：`_resolve_type_info` 新增 LRU 缓存（上限 1000 条），重复读取同类型变量时 DWARF 遍历从 O(depth) 降至 O(1)。
+- **批量 OpenOCD RPC**：新增 `_batch_read_raw_bytes` 方法，字符串和 64 位值的读取在一次锁获取下批量处理，减少锁竞争开销。
+- **变量类型图标重设计**：7 种变量类型采用语义化 SVG 图标（菱形=struct、圆角方块=class、三角形=array 等），配色方案鲜明现代。
+- **AXF→ELF 自动更新**：AXF 文件变更后自动转换 ELF 并重启服务器加载新调试信息，无需手动操作。
+- **服务器异步停止**：`stopAsync` 等待进程真正退出后再启动新进程，修复重启时端口占用导致 ping 失败的问题。
+- **Bug 修复**：修复 `is_server_ready` TOCTOU 竞态、`_connect` 持锁阻塞、`stopAsync` 超时破坏 `stoppingIntentionally` 标志、`PollScheduler.stop()` 不重置 `isTicking` 等 5 个 bug。
 
 ## 它解决什么问题
 
@@ -530,9 +540,11 @@ stm32-vscode-Live-watch/
 │  ├─ extension.ts                 # 扩展入口、命令、视图和自动启动逻辑
 │  ├─ elfResolver.ts               # EIDE AXF 查找、fromelf 定位和 ELF 生成
 │  ├─ serverClient.ts              # VS Code 扩展与后端服务通信
+│  ├─ pollScheduler.ts             # 统一轮询调度器，合并变量树和图表读取
 │  ├─ variableTreeDataProvider.ts  # 变量视图和操作视图
 │  ├─ chartPanel.ts                # 图表面板 WebviewView Provider
 │  ├─ chartManager.ts              # 图表数据采集和变量管理
+│  ├─ axfWatcher.ts                # AXF 文件变更监听与 ELF 自动转换
 │  ├─ config.ts                    # 配置读取和兼容旧配置
 │  └─ models/
 ├─ resources/
@@ -552,7 +564,7 @@ stm32-vscode-Live-watch/
 
 - 扩展名：`stm32-vscode-Live-watch`
 - 发布者：`ciyueYe`
-- 版本：`3.5.0`
+- 版本：`3.7.0`
 - 仓库：<https://github.com/1581525057/stm32-vscode-Live-watch>
 
 ## 致谢
