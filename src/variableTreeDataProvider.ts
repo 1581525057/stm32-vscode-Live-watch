@@ -29,7 +29,7 @@ export class VariableTreeItem extends vscode.TreeItem {
         public readonly isStale: boolean = false,
         public readonly staleTimestamp?: number
     ) {
-        super(VariableTreeItem.buildLabel(variableInfo, value, isStale), collapsibleState);
+        super(VariableTreeItem.buildLabel(variableInfo, value, isRoot, isStale), collapsibleState);
 
         this.description = this.buildDescription();
         this.tooltip = this.buildTooltip();
@@ -78,23 +78,28 @@ export class VariableTreeItem extends vscode.TreeItem {
         };
     }
 
-    private static buildLabel(variableInfo: VariableInfo, value: any, isStale: boolean): string {
+    private static buildLabel(variableInfo: VariableInfo, value: any, isRoot: boolean, isStale: boolean): string {
+        // 提取的子变量（路径含 '.'）显示完整路径，原始根变量用短名称
+        const displayName = (isRoot && variableInfo.path.includes('.'))
+            ? variableInfo.path
+            : variableInfo.name;
+
         if (variableInfo.hasChildren) {
             const [open, close] = VariableTreeItem.containerSymbols[variableInfo.type] || ['{', '}'];
-            return `${variableInfo.name} ${open} ··· ${close}`;
+            return `${displayName} ${open} ··· ${close}`;
         }
 
         if (value !== undefined && value !== null) {
             const valueText = variableInfo.type === 'string' ? `"${value}"` : String(value);
             const staleIndicator = isStale ? ' [过时]' : '';
-            return `${variableInfo.name} = ${valueText}${staleIndicator}`;
+            return `${displayName} = ${valueText}${staleIndicator}`;
         }
 
         if (isStale) {
-            return `${variableInfo.name} = 未连接`;
+            return `${displayName} = 未连接`;
         }
 
-        return `${variableInfo.name} = ?`;
+        return `${displayName} = ?`;
     }
 
     // 描述区域：类型名 + Badge 标签（struct / array / class / union）
