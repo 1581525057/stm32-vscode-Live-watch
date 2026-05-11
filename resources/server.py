@@ -1016,7 +1016,9 @@ class DebugDataServer:
 
         for path in paths:
             node = self.resolve_path(path)
-            if not node: continue
+            if not node:
+                results.append({"path": path, "value": None, "address": "0x0"})
+                continue
 
             if node.type == "string":
                 idx = len(results)
