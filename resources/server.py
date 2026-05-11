@@ -60,8 +60,12 @@ class TclRpcClient:
     def _send_rpc_unlocked(self, cmd: str) -> str:
         """底层 RPC 发送方法，调用者需自行持有 self.lock"""
         if not self.sock:
+            sys.stderr.write(f"[RPC] socket is None, reconnecting...\n")
+            sys.stderr.flush()
             self._connect()
         if not self.sock:
+            sys.stderr.write(f"[RPC] reconnect failed, cmd={cmd!r}\n")
+            sys.stderr.flush()
             return ""
         try:
             self.sock.sendall(cmd.encode("ascii") + b"\x1a")
@@ -76,11 +80,19 @@ class TclRpcClient:
                 chunks.append(chunk)
                 if b"\x1a" in chunk:
                     break
-            return b"".join(chunks).decode("ascii", errors="ignore").strip("\x1a")
-        except ConnectionError:
+            result = b"".join(chunks).decode("ascii", errors="ignore").strip("\x1a")
+            if not result:
+                sys.stderr.write(f"[RPC] empty response for cmd={cmd!r}\n")
+                sys.stderr.flush()
+            return result
+        except ConnectionError as e:
+            sys.stderr.write(f"[RPC] ConnectionError: {e}, reconnecting...\n")
+            sys.stderr.flush()
             self._connect()
             return ""
-        except Exception:
+        except Exception as e:
+            sys.stderr.write(f"[RPC] Exception: {type(e).__name__}: {e}, reconnecting...\n")
+            sys.stderr.flush()
             self._connect()
             return ""
 
@@ -128,12 +140,22 @@ class TclRpcClient:
     def _wait_for_target_ready(self, timeout: float = 2.0) -> bool:
         """等待目标就绪（复位后），轮询 targets 命令直到目标响应"""
         deadline = time.monotonic() + timeout
+        attempts = 0
         while time.monotonic() < deadline:
             with self.lock:
                 raw = self._send_rpc_unlocked("capture \"targets\"")
+            attempts += 1
             if raw and ("halted" in raw.lower() or "running" in raw.lower()):
+                if attempts > 1:
+                    sys.stderr.write(f"[WAIT-READY] target ready after {attempts} attempts, output: {raw!r}\n")
+                    sys.stderr.flush()
                 return True
+            if attempts <= 3:
+                sys.stderr.write(f"[WAIT-READY] attempt {attempts}: raw={raw!r}\n")
+                sys.stderr.flush()
             time.sleep(0.1)
+        sys.stderr.write(f"[WAIT-READY] TIMEOUT after {attempts} attempts\n")
+        sys.stderr.flush()
         return False
 
     def _batch_read_attempt(self, nodes: list[VariableNode]) -> list[Any]:
@@ -181,6 +203,11 @@ class TclRpcClient:
                         raw_bytes = bytes([int(h, 16) for h in hex_tokens[:total_size]])
                     except Exception:
                         raw_bytes = b""
+
+                    # 诊断：记录读取失败的情况
+                    if len(raw_bytes) < total_size:
+                        sys.stderr.write(f"[READ-FAIL] addr={hex(start_addr)} size={total_size} got={len(raw_bytes)} raw_res={raw_res!r}\n")
+                        sys.stderr.flush()
 
                     # 从原始字节缓冲区中按各节点的 size 解析值
                     for orig_idx, node in group:
