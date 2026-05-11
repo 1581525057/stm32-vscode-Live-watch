@@ -856,9 +856,10 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
             try {
                 const results = await this.serverClient.readPaths(pathsToRead);
                 for (const result of results) {
-                    this.valueCache.set(result.path, result.value);
-                    // 更新过时缓存
-                    if (result.value !== undefined && result.value !== null) {
+                    // null/undefined 表示读取失败，不缓存以免污染
+                    if (result.value !== null && result.value !== undefined) {
+                        this.valueCache.set(result.path, result.value);
+                        // 更新过时缓存
                         this.staleValueCache.set(result.path, {
                             value: result.value,
                             timestamp: Date.now()
