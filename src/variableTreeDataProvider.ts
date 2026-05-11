@@ -549,17 +549,25 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
 
         for (const result of results) {
             const previousValue = this.valueCache.get(result.path);
-            if (previousValue !== result.value) {
-                hasChanges = true;
-            }
-            this.valueCache.set(result.path, result.value);
+            if (result.value === null || result.value === undefined) {
+                // 读取失败：移除缓存条目，下轮轮询自动重试
+                if (this.valueCache.has(result.path)) {
+                    this.valueCache.delete(result.path);
+                    hasChanges = true;
+                }
+            } else {
+                if (previousValue !== result.value) {
+                    hasChanges = true;
+                }
+                this.valueCache.set(result.path, result.value);
 
-            // 更新过时数据缓存
-            if (result.value !== undefined && result.value !== null) {
-                this.staleValueCache.set(result.path, {
-                    value: result.value,
-                    timestamp: now
-                });
+                // 更新过时数据缓存
+                if (result.value !== undefined && result.value !== null) {
+                    this.staleValueCache.set(result.path, {
+                        value: result.value,
+                        timestamp: now
+                    });
+                }
             }
         }
 
