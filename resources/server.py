@@ -119,53 +119,66 @@ class TclRpcClient:
         if not nodes:
             return []
 
-        # 检查目标状态，运行时需要 halt 才能可靠读取内存
-        was_running = self.get_target_state() == "running"
-        if was_running:
-            self.halt()
-
-        try:
-            # 记录原始索引，用于返回结果与输入对齐
-            indexed_nodes = list(enumerate(nodes))
-            sorted_indexed = sorted(indexed_nodes, key=lambda x: x[1].addr)
-            results_list: list[Any] = [None] * len(nodes)
-            MAX_MERGE_SIZE = 256  # 单次 mdb 读取上限，避免超大请求
-            i = 0
-            while i < len(sorted_indexed):
-                # 合并连续节点，限制总大小
-                group = [sorted_indexed[i]]
-                group_end = sorted_indexed[i][1].addr + sorted_indexed[i][1].size
-                j = i + 1
-                while j < len(sorted_indexed):
-                    next_node = sorted_indexed[j][1]
-                    if next_node.addr == group_end and (group_end - sorted_indexed[i][1].addr + next_node.size) <= MAX_MERGE_SIZE:
-                        group.append(sorted_indexed[j])
-                        group_end = next_node.addr + next_node.size
-                        j += 1
-                    else:
-                        break
-
-                # 读取原始字节
-                start_addr = group[0][1].addr
-                total_size = group_end - start_addr
-                raw_bytes = self.read_raw_bytes(start_addr, total_size)
-
-                # 从原始字节缓冲区中按各节点的 size 解析值
-                for orig_idx, node in group:
-                    offset = node.addr - start_addr
-                    if offset + node.size <= len(raw_bytes):
-                        node_bytes = raw_bytes[offset:offset + node.size]
-                        raw_int = int.from_bytes(node_bytes, byteorder='little')
-                        results_list[orig_idx] = self._parse_raw_value(raw_int, node)
-                    else:
-                        results_list[orig_idx] = "N/A"
-
-                i += len(group)
-
-            return [r if r is not None else "N/A" for r in results_list]
-        finally:
+        with self.lock:
+            # 检查目标状态，运行时需要 halt 才能可靠读取内存
+            raw_state = self._send_rpc_unlocked("capture \"targets\"")
+            was_running = "halted" not in raw_state.lower()
             if was_running:
-                self.resume()
+                self._send_rpc_unlocked("halt")
+
+            try:
+                # 记录原始索引，用于返回结果与输入对齐
+                indexed_nodes = list(enumerate(nodes))
+                sorted_indexed = sorted(indexed_nodes, key=lambda x: x[1].addr)
+                results_list: list[Any] = [None] * len(nodes)
+                MAX_MERGE_SIZE = 256  # 单次 mdb 读取上限，避免超大请求
+                i = 0
+                while i < len(sorted_indexed):
+                    # 合并连续节点，限制总大小
+                    group = [sorted_indexed[i]]
+                    group_end = sorted_indexed[i][1].addr + sorted_indexed[i][1].size
+                    j = i + 1
+                    while j < len(sorted_indexed):
+                        next_node = sorted_indexed[j][1]
+                        if next_node.addr == group_end and (group_end - sorted_indexed[i][1].addr + next_node.size) <= MAX_MERGE_SIZE:
+                            group.append(sorted_indexed[j])
+                            group_end = next_node.addr + next_node.size
+                            j += 1
+                        else:
+                            break
+
+                    # 内联读取原始字节（避免调用 read_raw_bytes 导致重复获取锁）
+                    start_addr = group[0][1].addr
+                    total_size = group_end - start_addr
+                    raw_res = self._send_rpc_unlocked(f'capture "mdb {hex(start_addr)} {total_size}"')
+                    hex_tokens = []
+                    try:
+                        for line in raw_res.splitlines():
+                            if ':' in line:
+                                tokens = line.split(':', 1)[1].split()
+                                for t in tokens:
+                                    if len(t) == 2 and all(c in "0123456789abcdefABCDEF" for c in t):
+                                        hex_tokens.append(t)
+                        raw_bytes = bytes([int(h, 16) for h in hex_tokens[:total_size]])
+                    except Exception:
+                        raw_bytes = b""
+
+                    # 从原始字节缓冲区中按各节点的 size 解析值
+                    for orig_idx, node in group:
+                        offset = node.addr - start_addr
+                        if offset + node.size <= len(raw_bytes):
+                            node_bytes = raw_bytes[offset:offset + node.size]
+                            raw_int = int.from_bytes(node_bytes, byteorder='little')
+                            results_list[orig_idx] = self._parse_raw_value(raw_int, node)
+                        else:
+                            results_list[orig_idx] = "N/A"
+
+                    i += len(group)
+
+                return [r if r is not None else "N/A" for r in results_list]
+            finally:
+                if was_running:
+                    self._send_rpc_unlocked("resume")
 
     def read_raw_bytes(self, addr: int, size: int) -> bytes:
         """底层方法：使用 mdb 读取指定长度的纯字节流"""
