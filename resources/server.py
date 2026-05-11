@@ -118,44 +118,54 @@ class TclRpcClient:
     def batch_read(self, nodes: list[VariableNode]) -> list[Any]:
         if not nodes:
             return []
-        # 记录原始索引，用于返回结果与输入对齐
-        indexed_nodes = list(enumerate(nodes))
-        sorted_indexed = sorted(indexed_nodes, key=lambda x: x[1].addr)
-        results_list: list[Any] = [None] * len(nodes)
-        MAX_MERGE_SIZE = 256  # 单次 mdb 读取上限，避免超大请求
-        i = 0
-        while i < len(sorted_indexed):
-            # 合并连续节点，限制总大小
-            group = [sorted_indexed[i]]
-            group_end = sorted_indexed[i][1].addr + sorted_indexed[i][1].size
-            j = i + 1
-            while j < len(sorted_indexed):
-                next_node = sorted_indexed[j][1]
-                if next_node.addr == group_end and (group_end - sorted_indexed[i][1].addr + next_node.size) <= MAX_MERGE_SIZE:
-                    group.append(sorted_indexed[j])
-                    group_end = next_node.addr + next_node.size
-                    j += 1
-                else:
-                    break
 
-            # 读取原始字节
-            start_addr = group[0][1].addr
-            total_size = group_end - start_addr
-            raw_bytes = self.read_raw_bytes(start_addr, total_size)
+        # 检查目标状态，运行时需要 halt 才能可靠读取内存
+        was_running = self.get_target_state() == "running"
+        if was_running:
+            self.halt()
 
-            # 从原始字节缓冲区中按各节点的 size 解析值
-            for orig_idx, node in group:
-                offset = node.addr - start_addr
-                if offset + node.size <= len(raw_bytes):
-                    node_bytes = raw_bytes[offset:offset + node.size]
-                    raw_int = int.from_bytes(node_bytes, byteorder='little')
-                    results_list[orig_idx] = self._parse_raw_value(raw_int, node)
-                else:
-                    results_list[orig_idx] = "N/A"
+        try:
+            # 记录原始索引，用于返回结果与输入对齐
+            indexed_nodes = list(enumerate(nodes))
+            sorted_indexed = sorted(indexed_nodes, key=lambda x: x[1].addr)
+            results_list: list[Any] = [None] * len(nodes)
+            MAX_MERGE_SIZE = 256  # 单次 mdb 读取上限，避免超大请求
+            i = 0
+            while i < len(sorted_indexed):
+                # 合并连续节点，限制总大小
+                group = [sorted_indexed[i]]
+                group_end = sorted_indexed[i][1].addr + sorted_indexed[i][1].size
+                j = i + 1
+                while j < len(sorted_indexed):
+                    next_node = sorted_indexed[j][1]
+                    if next_node.addr == group_end and (group_end - sorted_indexed[i][1].addr + next_node.size) <= MAX_MERGE_SIZE:
+                        group.append(sorted_indexed[j])
+                        group_end = next_node.addr + next_node.size
+                        j += 1
+                    else:
+                        break
 
-            i += len(group)
+                # 读取原始字节
+                start_addr = group[0][1].addr
+                total_size = group_end - start_addr
+                raw_bytes = self.read_raw_bytes(start_addr, total_size)
 
-        return [r if r is not None else "N/A" for r in results_list]
+                # 从原始字节缓冲区中按各节点的 size 解析值
+                for orig_idx, node in group:
+                    offset = node.addr - start_addr
+                    if offset + node.size <= len(raw_bytes):
+                        node_bytes = raw_bytes[offset:offset + node.size]
+                        raw_int = int.from_bytes(node_bytes, byteorder='little')
+                        results_list[orig_idx] = self._parse_raw_value(raw_int, node)
+                    else:
+                        results_list[orig_idx] = "N/A"
+
+                i += len(group)
+
+            return [r if r is not None else "N/A" for r in results_list]
+        finally:
+            if was_running:
+                self.resume()
 
     def read_raw_bytes(self, addr: int, size: int) -> bytes:
         """底层方法：使用 mdb 读取指定长度的纯字节流"""
