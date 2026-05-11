@@ -119,15 +119,22 @@ class TclRpcClient:
         if not nodes:
             return []
 
-        # 重试机制：MCU 复位后 OpenOCD 需要时间重新建立连接
-        MAX_RETRIES = 3
-        for attempt in range(MAX_RETRIES):
-            result = self._batch_read_attempt(nodes)
-            if not all(r == "N/A" for r in result):
-                return result
-            if attempt < MAX_RETRIES - 1:
-                time.sleep(0.2)
-        return result
+        # MCU 复位后 OpenOCD 需要时间重新建立连接，等待目标就绪
+        if not self._wait_for_target_ready():
+            return ["N/A"] * len(nodes)
+
+        return self._batch_read_attempt(nodes)
+
+    def _wait_for_target_ready(self, timeout: float = 2.0) -> bool:
+        """等待目标就绪（复位后），轮询 targets 命令直到目标响应"""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            with self.lock:
+                raw = self._send_rpc_unlocked("capture \"targets\"")
+            if raw and ("halted" in raw.lower() or "running" in raw.lower()):
+                return True
+            time.sleep(0.1)
+        return False
 
     def _batch_read_attempt(self, nodes: list[VariableNode]) -> list[Any]:
         """单次批量读取尝试"""
