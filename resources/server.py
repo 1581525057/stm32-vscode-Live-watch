@@ -119,6 +119,18 @@ class TclRpcClient:
         if not nodes:
             return []
 
+        # 重试机制：MCU 复位后 OpenOCD 需要时间重新建立连接
+        MAX_RETRIES = 3
+        for attempt in range(MAX_RETRIES):
+            result = self._batch_read_attempt(nodes)
+            if not all(r == "N/A" for r in result):
+                return result
+            if attempt < MAX_RETRIES - 1:
+                time.sleep(0.2)
+        return result
+
+    def _batch_read_attempt(self, nodes: list[VariableNode]) -> list[Any]:
+        """单次批量读取尝试"""
         with self.lock:
             # 检查目标状态，运行时需要 halt 才能可靠读取内存
             raw_state = self._send_rpc_unlocked("capture \"targets\"")
