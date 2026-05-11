@@ -97,6 +97,24 @@ class TclRpcClient:
             result = self._send_rpc_unlocked("echo ping")
             return bool(result)
 
+    def get_target_state(self) -> str:
+        """查询目标状态，返回 'halted' 或 'running'"""
+        with self.lock:
+            raw = self._send_rpc_unlocked("capture \"targets\"")
+            if "halted" in raw.lower():
+                return "halted"
+            return "running"
+
+    def halt(self) -> None:
+        """暂停目标"""
+        with self.lock:
+            self._send_rpc_unlocked("halt")
+
+    def resume(self) -> None:
+        """恢复目标运行"""
+        with self.lock:
+            self._send_rpc_unlocked("resume")
+
     def batch_read(self, nodes: list[VariableNode]) -> list[Any]:
         if not nodes:
             return []
