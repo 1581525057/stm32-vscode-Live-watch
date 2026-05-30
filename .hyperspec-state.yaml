@@ -1,0 +1,12 @@
+version: 1
+active_change: improve-disconnected-feedback
+phase: apply
+checkpoint: task-1-complete
+project_profile:
+  languages: [typescript]
+  frameworks: [vscode-extension]
+  build_tool: npm
+  compile_command: npm run compile
+  test_command: npm run test:elf
+  structure: single-module
+  has_ci: false

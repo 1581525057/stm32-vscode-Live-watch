@@ -5,6 +5,12 @@ import * as path from 'path';
 import { VariableInfo, ReadResult, ServerResponse } from './models/variable';
 import { getConfigValue } from './config';
 
+export enum ConnectionState {
+    Disconnected = 'disconnected',
+    Connected = 'connected',
+    Reconnecting = 'reconnecting'
+}
+
 export class ServerClient {
     private process: ChildProcess | null = null;
     private buffer = '';
@@ -13,11 +19,29 @@ export class ServerClient {
     private _onClose: (() => void) | null = null;
     private stoppingIntentionally = false;
 
+    // 连接状态和事件
+    private _connectionState: ConnectionState = ConnectionState.Disconnected;
+    private _onConnectionStateChanged: vscode.EventEmitter<ConnectionState> = new vscode.EventEmitter<ConnectionState>();
+    readonly onConnectionStateChanged: vscode.Event<ConnectionState> = this._onConnectionStateChanged.event;
+
     constructor(private readonly serverScriptPath: string) {}
 
     /** 注册服务器关闭回调（进程意外退出时触发） */
     onClose(callback: () => void): void {
         this._onClose = callback;
+    }
+
+    /** 获取当前连接状态 */
+    getConnectionState(): ConnectionState {
+        return this._connectionState;
+    }
+
+    /** 更新连接状态并触发事件 */
+    private updateConnectionState(state: ConnectionState): void {
+        if (this._connectionState !== state) {
+            this._connectionState = state;
+            this._onConnectionStateChanged.fire(state);
+        }
     }
 
     private getServerExecutable(): string | null {
@@ -114,13 +138,17 @@ export class ServerClient {
                     this.activeRequest = null;
                 }
                 this.process = null;
+                this.updateConnectionState(ConnectionState.Disconnected);
                 // 仅在非主动停止时触发关闭回调（防止重启期间误触发 UI 重置）
                 if (!this.stoppingIntentionally && this._onClose) {
                     this._onClose();
                 }
             });
 
-            setTimeout(() => resolve(), 50);
+            setTimeout(() => {
+                this.updateConnectionState(ConnectionState.Connected);
+                resolve();
+            }, 50);
         });
     }
 
@@ -230,6 +258,7 @@ export class ServerClient {
             const proc = this.process;
             if (!proc) {
                 this.cleanupAfterStop();
+                this.updateConnectionState(ConnectionState.Disconnected);
                 resolve();
                 return;
             }
