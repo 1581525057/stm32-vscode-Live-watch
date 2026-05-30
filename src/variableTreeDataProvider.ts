@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { getConfigValue } from './config';
 import { VariableInfo, ReadResult } from './models/variable';
-import { ServerClient } from './serverClient';
+import { ServerClient, ConnectionState } from './serverClient';
 import { PollScheduler } from './pollScheduler';
 import { WatchPage, loadWatchPages, persistWatchPages, MAX_PAGES, MAX_PAGE_NAME_LENGTH, createDefaultWatchPage } from './models/page';
 
@@ -25,15 +25,17 @@ export class VariableTreeItem extends vscode.TreeItem {
         public readonly variableInfo: VariableInfo,
         public readonly collapsibleState: vscode.TreeItemCollapsibleState,
         public readonly isRoot: boolean,
-        public readonly value?: any
+        public readonly value?: any,
+        public readonly isStale: boolean = false,
+        public readonly staleTimestamp?: number
     ) {
-        super(VariableTreeItem.buildLabel(variableInfo, value), collapsibleState);
+        super(VariableTreeItem.buildLabel(variableInfo, value, isStale), collapsibleState);
 
         this.description = this.buildDescription();
         this.tooltip = this.buildTooltip();
         this.contextValue = this.buildContextValue();
         this.command = this.buildCommand();
-        this.iconPath = VariableTreeItem.buildIcon(variableInfo);
+        this.iconPath = VariableTreeItem.buildIcon(variableInfo, isStale);
     }
 
     // 容器符号映射：不同类型使用不同括号
@@ -45,12 +47,17 @@ export class VariableTreeItem extends vscode.TreeItem {
     };
 
     // 使用自定义 SVG 图标（resources/icons/），带语义化形状和配色
-    private static buildIcon(info: VariableInfo): vscode.ThemeIcon | { light: vscode.Uri; dark: vscode.Uri } {
+    private static buildIcon(info: VariableInfo, isStale: boolean): vscode.ThemeIcon | { light: vscode.Uri; dark: vscode.Uri } {
         const iconsRoot = path.join(__dirname, '..', 'resources', 'icons');
         const iconMap: Record<string, string> = {
             struct: 'struct.svg', class: 'class.svg', array: 'array.svg',
             union:  'union.svg',  string: 'string.svg', enum: 'enum.svg',
         };
+
+        // 过时数据使用灰色图标
+        if (isStale) {
+            return new vscode.ThemeIcon('circle-outline', new vscode.ThemeColor('disabledForeground'));
+        }
 
         if (info.hasChildren) {
             const file = iconMap[info.type] || 'misc.svg';
@@ -71,7 +78,7 @@ export class VariableTreeItem extends vscode.TreeItem {
         };
     }
 
-    private static buildLabel(variableInfo: VariableInfo, value: any): string {
+    private static buildLabel(variableInfo: VariableInfo, value: any, isStale: boolean): string {
         if (variableInfo.hasChildren) {
             const [open, close] = VariableTreeItem.containerSymbols[variableInfo.type] || ['{', '}'];
             return `${variableInfo.name} ${open} ··· ${close}`;
@@ -79,7 +86,12 @@ export class VariableTreeItem extends vscode.TreeItem {
 
         if (value !== undefined && value !== null) {
             const valueText = variableInfo.type === 'string' ? `"${value}"` : String(value);
-            return `${variableInfo.name} = ${valueText}`;
+            const staleIndicator = isStale ? ' [过时]' : '';
+            return `${variableInfo.name} = ${valueText}${staleIndicator}`;
+        }
+
+        if (isStale) {
+            return `${variableInfo.name} = 未连接`;
         }
 
         return `${variableInfo.name} = ?`;
@@ -88,11 +100,31 @@ export class VariableTreeItem extends vscode.TreeItem {
     // 描述区域：类型名 + Badge 标签（struct / array / class / union）
     private buildDescription(): string {
         const typeName = this.variableInfo.typeName || '';
+
         if (!this.variableInfo.hasChildren) {
+            if (this.isStale) {
+                return typeName ? `${typeName} [过时]` : '[过时]';
+            }
             return typeName;
         }
+
         const badge = this.variableInfo.type ? this.variableInfo.type.toUpperCase() : '';
-        return typeName && badge ? `${typeName}  ${badge}` : typeName || badge;
+        const staleBadge = this.isStale ? ' [过时]' : '';
+        return typeName && badge ? `${typeName}  ${badge}${staleBadge}` : typeName || badge;
+    }
+
+    /** 格式化相对时间 */
+    private formatRelativeTime(timestamp: number): string {
+        const now = Date.now();
+        const diff = now - timestamp;
+
+        if (diff < 60000) {
+            return `${Math.floor(diff / 1000)}秒前`;
+        } else if (diff < 3600000) {
+            return `${Math.floor(diff / 60000)}分钟前`;
+        } else {
+            return `${Math.floor(diff / 3600000)}小时前`;
+        }
     }
 
     private buildTooltip(): vscode.MarkdownString {
@@ -102,10 +134,16 @@ export class VariableTreeItem extends vscode.TreeItem {
         md.appendMarkdown(`- **Type:** \`${this.variableInfo.typeName || this.variableInfo.type}\`\n`);
         md.appendMarkdown(`- **Address:** \`${this.variableInfo.address}\`\n`);
         md.appendMarkdown(`- **Size:** \`${this.variableInfo.size} bytes\`\n`);
-        
+
         if (this.value !== undefined) {
             md.appendMarkdown(`- **Value:** \`${this.value}\`\n`);
         }
+
+        if (this.isStale && this.staleTimestamp) {
+            const relativeTime = this.formatRelativeTime(this.staleTimestamp);
+            md.appendMarkdown(`- **Status:** ⚠️ 过时数据 (最后更新于 ${relativeTime})\n`);
+        }
+
         return md;
     }
 
@@ -203,6 +241,11 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
         private pollScheduler: PollScheduler
     ) {
         this.refreshInterval = getConfigValue<number>('refreshInterval', 250);
+
+        // 监听连接状态变化
+        this.serverClient.onConnectionStateChanged(() => {
+            this.refresh();
+        });
     }
 
     // 获取当前活动页面
@@ -806,11 +849,20 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
                 const results = await this.serverClient.readPaths(pathsToRead);
                 for (const result of results) {
                     this.valueCache.set(result.path, result.value);
+                    // 更新过时缓存
+                    if (result.value !== undefined && result.value !== null) {
+                        this.staleValueCache.set(result.path, {
+                            value: result.value,
+                            timestamp: Date.now()
+                        });
+                    }
                 }
             } catch (error) {
                 console.warn('Failed to pre-fetch values for newly expanded items:', error);
             }
         }
+
+        const isConnected = this.serverClient.getConnectionState() === ConnectionState.Connected;
 
         for (const variable of variables) {
             const collapsibleState = variable.hasChildren
@@ -818,7 +870,14 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
                 : vscode.TreeItemCollapsibleState.None;
 
             const value = this.valueCache.get(variable.path);
-            items.push(new VariableTreeItem(variable, collapsibleState, isRootLevel, value));
+            const staleValue = this.staleValueCache.get(variable.path);
+
+            // 判断是否为过时数据
+            const isStale = !isConnected && staleValue !== undefined;
+            const displayValue = isConnected ? value : staleValue?.value;
+            const staleTimestamp = isStale ? staleValue?.timestamp : undefined;
+
+            items.push(new VariableTreeItem(variable, collapsibleState, isRootLevel, displayValue, isStale, staleTimestamp));
         }
 
         return items;

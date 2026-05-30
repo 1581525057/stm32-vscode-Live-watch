@@ -1,7 +1,7 @@
 version: 1
 active_change: improve-disconnected-feedback
 phase: apply
-checkpoint: task-3-complete
+checkpoint: task-4-complete
 project_profile:
   languages: [typescript]
   frameworks: [vscode-extension]

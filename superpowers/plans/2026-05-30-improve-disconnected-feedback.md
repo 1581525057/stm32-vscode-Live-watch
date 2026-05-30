@@ -499,7 +499,7 @@ git commit -m "feat: add stale value cache to VariableTreeDataProvider"
 **Files:**
 - Modify: `src/variableTreeDataProvider.ts`
 
-- [ ] **Step 1: 添加连接状态依赖（Task 4）**
+- [x] **Step 1: 添加连接状态依赖（Task 4）**
 
 修改 VariableTreeDataProvider 构造函数，添加 ServerClient 依赖和连接状态监听：
 
@@ -518,7 +518,7 @@ git commit -m "feat: add stale value cache to VariableTreeDataProvider"
     }
 ```
 
-- [ ] **Step 2: 添加时间格式化工具方法（Task 4）**
+- [x] **Step 2: 添加时间格式化工具方法（Task 4）**
 
 在 VariableTreeDataProvider 类中添加时间格式化方法：
 
@@ -541,7 +541,7 @@ git commit -m "feat: add stale value cache to VariableTreeDataProvider"
     }
 ```
 
-- [ ] **Step 3: 修改 buildLabel 方法处理过时数据（Task 4）**
+- [x] **Step 3: 修改 buildLabel 方法处理过时数据（Task 4）**
 
 修改 VariableTreeItem 的 `buildLabel` 静态方法，添加服务器状态参数：
 
@@ -566,7 +566,7 @@ git commit -m "feat: add stale value cache to VariableTreeDataProvider"
     }
 ```
 
-- [ ] **Step 4: 修改构造函数传递过时状态（Task 4）**
+- [x] **Step 4: 修改构造函数传递过时状态（Task 4）**
 
 修改 VariableTreeItem 构造函数，添加 isStale 参数：
 
@@ -589,7 +589,7 @@ export class VariableTreeItem extends vscode.TreeItem {
     }
 ```
 
-- [ ] **Step 5: 修改 buildDescription 方法（Task 4）**
+- [x] **Step 5: 修改 buildDescription 方法（Task 4）**
 
 修改 `buildDescription` 方法，添加过时标签：
 
@@ -610,7 +610,7 @@ export class VariableTreeItem extends vscode.TreeItem {
     }
 ```
 
-- [ ] **Step 6: 修改 buildTooltip 方法（Task 4）**
+- [x] **Step 6: 修改 buildTooltip 方法（Task 4）**
 
 修改 `buildTooltip` 方法，添加最后更新时间：
 
@@ -666,7 +666,7 @@ export class VariableTreeItem extends vscode.TreeItem {
     }
 ```
 
-- [ ] **Step 7: 修改 buildIcon 方法（Task 4）**
+- [x] **Step 7: 修改 buildIcon 方法（Task 4）**
 
 修改 `buildIcon` 方法，为过时数据使用灰色图标：
 
@@ -703,7 +703,7 @@ export class VariableTreeItem extends vscode.TreeItem {
     }
 ```
 
-- [ ] **Step 8: 修改 createTreeItems 传递过时状态（Task 4）**
+- [x] **Step 8: 修改 createTreeItems 传递过时状态（Task 4）**
 
 修改 `createTreeItems` 方法，传递过时状态：
 
@@ -759,7 +759,7 @@ export class VariableTreeItem extends vscode.TreeItem {
     }
 ```
 
-- [ ] **Step 9: 编译验证（Task 4）**
+- [x] **Step 9: 编译验证（Task 4）**
 
 运行编译命令验证代码正确：
 
@@ -769,7 +769,7 @@ npm run compile
 
 预期：编译成功，无错误
 
-- [ ] **Step 10: 提交代码（Task 4）**
+- [x] **Step 10: 提交代码（Task 4）**
 
 ```bash
 git add src/variableTreeDataProvider.ts
