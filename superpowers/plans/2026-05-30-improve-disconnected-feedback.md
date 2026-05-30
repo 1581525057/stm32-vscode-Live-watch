@@ -381,7 +381,7 @@ git commit -m "feat: add auto-reconnect mechanism to ServerClient"
 **Files:**
 - Modify: `src/variableTreeDataProvider.ts`
 
-- [ ] **Step 1: 添加过时数据接口和缓存（Task 3）**
+- [x] **Step 1: 添加过时数据接口和缓存（Task 3）**
 
 在 `src/variableTreeDataProvider.ts` 文件顶部添加过时数据接口：
 
@@ -402,7 +402,7 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
     private staleValueCache: Map<string, StaleValue> = new Map();
 ```
 
-- [ ] **Step 2: 修改 processReadResults 更新过时缓存（Task 3）**
+- [x] **Step 2: 修改 processReadResults 更新过时缓存（Task 3）**
 
 修改 `processReadResults` 方法，在读取成功时更新过时缓存：
 
@@ -433,7 +433,7 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
     }
 ```
 
-- [ ] **Step 3: 添加获取过时数据方法（Task 3）**
+- [x] **Step 3: 添加获取过时数据方法（Task 3）**
 
 在 VariableTreeDataProvider 类中添加获取过时数据的方法：
 
@@ -449,7 +449,7 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
     }
 ```
 
-- [ ] **Step 4: 修改 deleteVariable 清理过时缓存（Task 3）**
+- [x] **Step 4: 修改 deleteVariable 清理过时缓存（Task 3）**
 
 修改 `deleteVariable` 方法，同时清理过时缓存：
 
@@ -475,7 +475,7 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
     }
 ```
 
-- [ ] **Step 5: 编译验证（Task 3）**
+- [x] **Step 5: 编译验证（Task 3）**
 
 运行编译命令验证代码正确：
 
@@ -485,7 +485,7 @@ npm run compile
 
 预期：编译成功，无错误
 
-- [ ] **Step 6: 提交代码（Task 3）**
+- [x] **Step 6: 提交代码（Task 3）**
 
 ```bash
 git add src/variableTreeDataProvider.ts

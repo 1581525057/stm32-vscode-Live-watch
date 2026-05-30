@@ -15,6 +15,11 @@ interface DragData {
     sourceIndex: number;
 }
 
+interface StaleValue {
+    value: any;
+    timestamp: number;
+}
+
 export class VariableTreeItem extends vscode.TreeItem {
     constructor(
         public readonly variableInfo: VariableInfo,
@@ -183,6 +188,7 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
     private allVariables: Map<string, VariableInfo> = new Map();
     private valueCache: Map<string, any> = new Map();
     private childrenCache: Map<string, VariableInfo[]> = new Map(); // 缓存 listChildren 结果，避免每 250ms 重复 RPC
+    private staleValueCache: Map<string, StaleValue> = new Map(); // 过时数据缓存
 
     // 多页面状态
     private pages: WatchPage[] = [];
@@ -496,13 +502,24 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
      */
     private processReadResults(results: ReadResult[]): void {
         let hasChanges = false;
+        const now = Date.now();
+
         for (const result of results) {
             const previousValue = this.valueCache.get(result.path);
             if (previousValue !== result.value) {
                 hasChanges = true;
             }
             this.valueCache.set(result.path, result.value);
+
+            // 更新过时数据缓存
+            if (result.value !== undefined && result.value !== null) {
+                this.staleValueCache.set(result.path, {
+                    value: result.value,
+                    timestamp: now
+                });
+            }
         }
+
         if (hasChanges) {
             this.refresh();
         }
@@ -527,6 +544,16 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
         } catch (error) {
             console.warn('Manual refresh failed:', error);
         }
+    }
+
+    /** 获取过时数据（包含时间戳） */
+    getStaleValue(path: string): StaleValue | undefined {
+        return this.staleValueCache.get(path);
+    }
+
+    /** 清除过时数据缓存 */
+    clearStaleValueCache(): void {
+        this.staleValueCache.clear();
     }
 
     private registerVariables(variables: VariableInfo[]): void {
@@ -692,6 +719,13 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
         for (const key of this.valueCache.keys()) {
             if (key === item.variableInfo.path || key.startsWith(item.variableInfo.path + '.') || key.startsWith(item.variableInfo.path + '[')) {
                 this.valueCache.delete(key);
+            }
+        }
+
+        // 清理过时数据缓存
+        for (const key of this.staleValueCache.keys()) {
+            if (key === item.variableInfo.path || key.startsWith(item.variableInfo.path + '.') || key.startsWith(item.variableInfo.path + '[')) {
+                this.staleValueCache.delete(key);
             }
         }
 
