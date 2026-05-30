@@ -24,6 +24,13 @@ export class ServerClient {
     private _onConnectionStateChanged: vscode.EventEmitter<ConnectionState> = new vscode.EventEmitter<ConnectionState>();
     readonly onConnectionStateChanged: vscode.Event<ConnectionState> = this._onConnectionStateChanged.event;
 
+    // 自动重连相关
+    private reconnectTimer: NodeJS.Timeout | null = null;
+    private reconnectInterval: number = 5000;
+    private elfPath: string = '';
+    private host: string = '127.0.0.1';
+    private port: number = 50001;
+
     constructor(private readonly serverScriptPath: string) {}
 
     /** 注册服务器关闭回调（进程意外退出时触发） */
@@ -41,6 +48,55 @@ export class ServerClient {
         if (this._connectionState !== state) {
             this._connectionState = state;
             this._onConnectionStateChanged.fire(state);
+        }
+    }
+
+    /** 加载重连配置 */
+    loadReconnectConfig(): void {
+        const config = vscode.workspace.getConfiguration('stm32LiveWatch');
+        this.reconnectInterval = Math.max(1000, config.get<number>('reconnectInterval', 5000));
+    }
+
+    /** 启动自动重连定时器 */
+    startAutoReconnect(): void {
+        if (this.reconnectTimer || this._connectionState === ConnectionState.Connected) {
+            return;
+        }
+
+        this.updateConnectionState(ConnectionState.Reconnecting);
+
+        this.reconnectTimer = setInterval(async () => {
+            if (this._connectionState === ConnectionState.Connected) {
+                this.stopAutoReconnect();
+                return;
+            }
+
+            try {
+                console.log('Attempting to reconnect...');
+                await this.start(this.elfPath, this.host, this.port);
+                console.log('Reconnected successfully');
+                this.stopAutoReconnect();
+            } catch (error) {
+                console.warn('Reconnect failed:', error);
+            }
+        }, this.reconnectInterval);
+    }
+
+    /** 停止自动重连定时器 */
+    stopAutoReconnect(): void {
+        if (this.reconnectTimer) {
+            clearInterval(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
+    }
+
+    /** 更新重连间隔 */
+    updateReconnectInterval(interval: number): void {
+        this.reconnectInterval = Math.max(1000, interval);
+        // 如果正在重连，重启定时器以使用新间隔
+        if (this.reconnectTimer) {
+            this.stopAutoReconnect();
+            this.startAutoReconnect();
         }
     }
 
@@ -81,6 +137,12 @@ export class ServerClient {
                 resolve();
                 return;
             }
+
+            // 保存连接参数用于重连
+            this.elfPath = elfPath;
+            this.host = host;
+            this.port = port;
+            this.loadReconnectConfig();
 
             const serverExe = this.getServerExecutable();
             const useExecutable = serverExe !== null;
@@ -139,9 +201,16 @@ export class ServerClient {
                 }
                 this.process = null;
                 this.updateConnectionState(ConnectionState.Disconnected);
-                // 仅在非主动停止时触发关闭回调（防止重启期间误触发 UI 重置）
-                if (!this.stoppingIntentionally && this._onClose) {
-                    this._onClose();
+
+                // 仅在非主动停止时触发关闭回调并启动自动重连
+                if (!this.stoppingIntentionally) {
+                    if (this._onClose) {
+                        this._onClose();
+                    }
+                    // 启动自动重连
+                    if (this.elfPath) {
+                        this.startAutoReconnect();
+                    }
                 }
             });
 
@@ -255,6 +324,9 @@ export class ServerClient {
     /** 异步停止服务器，等待进程真正退出后返回 */
     stopAsync(): Promise<void> {
         return new Promise<void>((resolve) => {
+            // 停止自动重连
+            this.stopAutoReconnect();
+
             const proc = this.process;
             if (!proc) {
                 this.cleanupAfterStop();
@@ -305,5 +377,10 @@ export class ServerClient {
 
     isRunning(): boolean {
         return this.process !== null;
+    }
+
+    dispose(): void {
+        this.stopAutoReconnect();
+        this._onConnectionStateChanged.dispose();
     }
 }

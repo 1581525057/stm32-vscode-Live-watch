@@ -173,7 +173,7 @@ git commit -m "feat: add connection state enum and events to ServerClient"
 - Modify: `src/serverClient.ts`
 - Modify: `package.json`
 
-- [ ] **Step 1: 添加重连配置项（Task 2）**
+- [x] **Step 1: 添加重连配置项（Task 2）**
 
 在 `package.json` 的 `contributes.configuration.properties` 中添加：
 
@@ -186,7 +186,7 @@ git commit -m "feat: add connection state enum and events to ServerClient"
 }
 ```
 
-- [ ] **Step 2: 添加重连定时器属性（Task 2）**
+- [x] **Step 2: 添加重连定时器属性（Task 2）**
 
 在 ServerClient 类中添加重连相关属性：
 
@@ -212,7 +212,7 @@ export class ServerClient {
     private port: number = 50001;
 ```
 
-- [ ] **Step 3: 添加重连配置加载方法（Task 2）**
+- [x] **Step 3: 添加重连配置加载方法（Task 2）**
 
 在 ServerClient 类中添加配置加载方法：
 
@@ -224,7 +224,7 @@ export class ServerClient {
     }
 ```
 
-- [ ] **Step 4: 修改 start 方法保存连接参数（Task 2）**
+- [x] **Step 4: 修改 start 方法保存连接参数（Task 2）**
 
 修改 `start` 方法，保存连接参数用于重连：
 
@@ -247,7 +247,7 @@ export class ServerClient {
     }
 ```
 
-- [ ] **Step 5: 实现自动重连方法（Task 2）**
+- [x] **Step 5: 实现自动重连方法（Task 2）**
 
 在 ServerClient 类中添加自动重连方法：
 
@@ -296,7 +296,7 @@ export class ServerClient {
     }
 ```
 
-- [ ] **Step 6: 修改 close 回调启动自动重连（Task 2）**
+- [x] **Step 6: 修改 close 回调启动自动重连（Task 2）**
 
 修改 `process.on('close')` 回调，在非主动停止时启动自动重连：
 
@@ -323,7 +323,7 @@ export class ServerClient {
             });
 ```
 
-- [ ] **Step 7: 修改 stop 方法停止自动重连（Task 2）**
+- [x] **Step 7: 修改 stop 方法停止自动重连（Task 2）**
 
 修改 `stopAsync` 方法，在主动停止时停止自动重连：
 
@@ -346,7 +346,7 @@ export class ServerClient {
     }
 ```
 
-- [ ] **Step 8: 添加 dispose 方法清理资源（Task 2）**
+- [x] **Step 8: 添加 dispose 方法清理资源（Task 2）**
 
 在 ServerClient 类中添加 dispose 方法：
 
@@ -357,7 +357,7 @@ export class ServerClient {
     }
 ```
 
-- [ ] **Step 9: 编译验证（Task 2）**
+- [x] **Step 9: 编译验证（Task 2）**
 
 运行编译命令验证代码正确：
 
@@ -367,7 +367,7 @@ npm run compile
 
 预期：编译成功，无错误
 
-- [ ] **Step 10: 提交代码（Task 2）**
+- [x] **Step 10: 提交代码（Task 2）**
 
 ```bash
 git add src/serverClient.ts package.json
