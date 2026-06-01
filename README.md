@@ -3,7 +3,7 @@
 **中文** | [English](README_EN.md)
 
 发布者：ciyueYe  
-版本：3.7.0  
+版本：4.0.3  
 适用场景：VS Code + EIDE + Cortex-Debug + OpenOCD 的 STM32 实时变量观察与图表可视化
 
 `stm32-vscode-Live-watch` 是一个面向 STM32 调试阶段的 VS Code 扩展。它不会替代调试器，而是在现有 EIDE、Cortex-Debug、OpenOCD 工作流旁边增加一个更直接的实时变量观察界面：你编译工程、启动调试、添加变量，扩展负责从 ELF 调试信息里解析变量地址，并通过 OpenOCD 读取目标板内存。
@@ -77,6 +77,33 @@
 - **AXF→ELF 自动更新**：AXF 文件变更后自动转换 ELF 并重启服务器加载新调试信息，无需手动操作。
 - **服务器异步停止**：`stopAsync` 等待进程真正退出后再启动新进程，修复重启时端口占用导致 ping 失败的问题。
 - **Bug 修复**：修复 `is_server_ready` TOCTOU 竞态、`_connect` 持锁阻塞、`stopAsync` 超时破坏 `stoppingIntentionally` 标志、`PollScheduler.stop()` 不重置 `isTicking` 等 5 个 bug。
+
+4.0.0 图表界面改进与用户体验优化：
+
+- **页面切换 tab 样式优化**：使用高对比度颜色和字重，页面切换更易识别。
+- **子变量删除支持**：支持直接删除子变量，无需先删除父变量。
+- **图表时间窗口扩展**：添加 120s（2 分钟）时间窗口选项，满足长时间趋势观察需求。
+- **图表高频刷新支持**：添加 20ms（50Hz）刷新频率选项，满足高频采样需求。
+- **调色板优化**：使用高对比度调色板，图表线条更显眼。
+
+4.0.1 拖拽限制修复与页面切换 tab 样式改进：
+
+- **移除拖拽限制**：允许拖出结构体、类、数组等任何类型的变量作为独立根变量。
+- **页面切换 tab 样式改进**：使用固定颜色（#3c3c3c/#007acc），确保在所有 VS Code 主题下可见。
+
+4.0.2 Watch 页面指示器样式优化：
+
+- **使用 layers 图标**：替代 list-flat，更具辨识度。
+- **添加表情符号**：label 添加 📄 表情符号，增加视觉效果。
+- **优化 description**：显示 "Page X of Y" 格式，更清晰。
+- **添加 tooltip**：显示详细信息，包含页面名称和变量数量。
+
+4.0.3 增强 Watch 页面指示器样式：
+
+- **使用装饰分隔线**：label 使用 ━━━ 分隔线装饰，增强视觉层次。
+- **优化 description 格式**：显示 "Page X/Y • N vars" 格式，更简洁。
+- **使用 Markdown tooltip**：tooltip 使用 Markdown 格式，显示更详细的信息。
+- **使用主题色**：图标使用 charts.foreground 主题色，保持与 VS Code 一致性。
 
 ## 它解决什么问题
 
@@ -366,7 +393,7 @@ fromelf.exe --elf --output build/app.elf build/app.axf
 ### 方法一：从 GitHub Releases 下载 VSIX 安装（推荐）
 
 1. 打开 [Releases 页面](https://github.com/1581525057/stm32-vscode-Live-watch/releases)。
-2. 下载最新版本的 `.vsix` 文件，例如 `stm32-vscode-Live-watch-3.3.0.vsix`。
+2. 下载最新版本的 `.vsix` 文件，例如 `stm32-vscode-Live-watch-4.0.3.vsix`。
 3. 打开 VS Code。
 4. 按 `Ctrl+Shift+P`，输入 `vsix`，选择 `Extensions: Install from VSIX...`。
 5. 在文件选择窗口中，找到刚才下载的 `.vsix` 文件，点击打开。
@@ -564,7 +591,7 @@ stm32-vscode-Live-watch/
 
 - 扩展名：`stm32-vscode-Live-watch`
 - 发布者：`ciyueYe`
-- 版本：`3.7.0`
+- 版本：`4.0.3`
 - 仓库：<https://github.com/1581525057/stm32-vscode-Live-watch>
 
 ## 致谢
