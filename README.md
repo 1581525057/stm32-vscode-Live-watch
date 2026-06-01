@@ -1,599 +1,335 @@
-# STM32 Live Watch
+<div align="center">
+
+# 🔬 STM32 Live Watch
+
+**Real-time Variable Monitor & Chart Visualization for VS Code**
+
+[![Version](https://img.shields.io/badge/version-4.0.3-blue?style=flat-square)](https://github.com/1581525057/stm32-vscode-Live-watch/releases)
+[![VS Code](https://img.shields.io/badge/VS%20Code-1.85.0+-007ACC?style=flat-square&logo=visual-studio-code)](https://code.visualstudio.com/)
+[![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Win32-lightgrey?style=flat-square)](https://github.com/1581525057/stm32-vscode-Live-watch)
 
 **中文** | [English](README_EN.md)
 
-发布者：ciyueYe  
-版本：4.0.3  
-适用场景：VS Code + EIDE + Cortex-Debug + OpenOCD 的 STM32 实时变量观察与图表可视化
+---
 
-`stm32-vscode-Live-watch` 是一个面向 STM32 调试阶段的 VS Code 扩展。它不会替代调试器，而是在现有 EIDE、Cortex-Debug、OpenOCD 工作流旁边增加一个更直接的实时变量观察界面：你编译工程、启动调试、添加变量，扩展负责从 ELF 调试信息里解析变量地址，并通过 OpenOCD 读取目标板内存。
+![STM32 Live Watch Demo](resources/icon.jpg)
 
-## 开发背景
+</div>
 
-本项目源于深圳技术大学 1034 实验室（sztu1034）的实际需求。在嵌入式开发过程中，调试变量往往需要借助多种外部工具——Keil 的 Watch 窗口、逻辑分析仪、串口绘图助手、独立的上位机软件等，工具之间切换频繁，配置繁琐，尤其在 PID 调参、传感器数据观测等需要实时波形的场景下，开发者往往需要额外编写上位机程序或使用串口绘图工具来观察变量趋势，增加了大量非核心开发工作量。
+## 📖 Overview
 
-本扩展的目标是将这些能力集成到 VS Code 中，让开发者在同一个编辑器内完成代码编写、变量监视、波形观测的完整调试闭环，省去繁杂的工具链配置和额外的图像处理开发工作，使嵌入式调试更加高效和直观。
+`stm32-vscode-Live-watch` is a VS Code extension designed for STM32 debugging. It provides a real-time variable monitoring interface alongside your existing EIDE, Cortex-Debug, and OpenOCD workflow.
 
-本项目的构思和设计由作者长期酝酿，2026 年五一假期期间借助 AI 辅助实现，从代码编写到发布 3.0.0 版本仅用了 3 天时间。AI 在架构实现、代码编写和文档整理等环节提供了高效协助，让一个长期搁置的想法快速落地为可用产品。
+<div align="center">
 
-2.1.0 重点优化了变量显示可读性和文档表述：
+### 🎯 What It Does
 
-- 变量名和值放到 TreeView 主文本区域，不再都挤在灰色说明文字里。
-- 文档中统一使用”可直接读写的普通变量”这类用户容易理解的说法。
-- 沿用双面板界面结构：`1. stm32livewatch实时变量查看` 和 `2. 操作` 是左侧栏里的两个同级面板。
-- 继续支持 C++ class/struct 展开，例如 `PID pid_yaw;` 可以展开到 public 成员。
-
-3.0.0 新增变量图表查看模块：
-
-- 底部面板实时折线图，支持多个变量同时绘制。
-- 从监视面板右键或图表面板内手动添加变量到图表。
-- 独立刷新通道，可配置 50ms / 100ms / 250ms 采集间隔。
-- 相对时间轴平滑滑动，X 轴右侧留白，Y 轴自动缩放。
-- 支持暂停/继续、清除历史、时间窗口切换（5s / 10s / 30s / 60s）。
-- 鼠标悬停显示精确值，滚轮缩放时间轴。
-
-3.1.0 图表系统升级：
-
-- 图表自动适配 VS Code 亮色/暗色主题，无需手动切换。
-- 图例区域实时显示每个变量的最大值、最小值和均值统计。
-- 双击图例变量名可固定 Y 轴范围，Auto Y 按钮一键恢复自动缩放。
-- 新增 Export 按钮，一键导出图表数据为 CSV 文件，支持 Excel 打开。
-
-3.3.0 Bug 修复与性能优化：
-
-- 修复 C++ 静态成员变量（如 `DJI_Motor_Class::DJI_Yaw_Motor`）无法展开的 Bug。
-- 新增 `union` 类型支持，联合体现在可正确展开成员。
-- 修复枚举类型高字节值被错误符号扩展的问题（如 `255` 显示为 `-1`）。
-- 修复 `stop()` 未拒绝活跃请求导致调用方 Promise 永久挂起的问题。
-- 修复 `stop()` 未清空 buffer 导致重启后 JSON 解析失败的问题。
-- 新增调试会话结束时自动停止图表数据采集，避免无意义的超时请求。
-- 图表颜色分配一致性修复，移除再添加变量不再变色。
-- 图例值更新改用缓存 DOM 引用，消除每 250ms 的 `querySelectorAll` 开销。
-- 变量树 `listChildren` 结果缓存，展开节点不再每 250ms 重复 RPC 调用。
-- 网络接收缓冲区优化，解决大响应时的 O(n²) 内存分配问题。
-
-3.5.0 AC5/AC6 双编译器兼容、性能优化与 Bug 修复：
-
-- **AC5 编译器兼容**：新增 `pyelftools` 内置方法解析 DWARF 类型引用，ARM Compiler 5 编译的固件（133+ CU）现在可正确解析全局变量。
-- **C++ extern 类实例兼容**：保留手动偏移计算用于 `DW_AT_specification` 链解析，确保 `extern` 类实例（如 `chassis_motor`）正确可见。
-- **ELF 路径自动识别增强**：支持 EIDE AXF 自动转换 ELF，新增 `fromelf.exe` 自动定位。
-- **批量读取优化**：合并连续内存节点为单次 `mdb` 请求，限制单次读取上限 256 字节，减少 OpenOCD 通信开销。
-- **OpenOCD 超时保护**：`_send_rpc` 新增 5 秒整体超时，防止 OpenOCD 无响应导致永久挂起。
-- **请求超时保护**：`serverClient.ts` 每个请求新增 10 秒超时，防止 Promise 永久挂起。
-- **图表采集超时修复**：修复 `collectData` 超时后 `readPaths` Promise 未处理导致的 unhandled rejection。
-- **进程通信健壮性**：`processBuffer` 不再因非 JSON 诊断输出而误拒活跃请求。
-- **read_paths 重复路径支持**：修复同一路径多次出现时结果丢失的问题。
-- **字符串写入优化**：批量使用 `mww` 替代逐字节 `mwb`，写入速度提升约 4 倍。
-- **代码去重**：`read_memory_bytes` 复用 `read_raw_bytes`，消除重复的十六进制解析逻辑。
-- **LocationExpr 支持**：`_parse_location_address` 新增 `LocationExpr` 包装和 `.debug_loc` 位置列表解析，兼容 AC5 DWARF 编码。
-- **诊断命令**：新增 `Dump DWARF Variables` 命令和 `--verbose` 启动参数，便于排查变量解析问题。
-
-3.7.0 性能优化、变量图标重设计与 Bug 修复：
-
-- **统一轮询调度器**：新增 `PollScheduler`，将变量树（250ms）和图表（100ms）的轮询合并为一次 `readPaths` 请求，消除争抢，刷新更流畅。
-- **DWARF 类型解析缓存**：`_resolve_type_info` 新增 LRU 缓存（上限 1000 条），重复读取同类型变量时 DWARF 遍历从 O(depth) 降至 O(1)。
-- **批量 OpenOCD RPC**：新增 `_batch_read_raw_bytes` 方法，字符串和 64 位值的读取在一次锁获取下批量处理，减少锁竞争开销。
-- **变量类型图标重设计**：7 种变量类型采用语义化 SVG 图标（菱形=struct、圆角方块=class、三角形=array 等），配色方案鲜明现代。
-- **AXF→ELF 自动更新**：AXF 文件变更后自动转换 ELF 并重启服务器加载新调试信息，无需手动操作。
-- **服务器异步停止**：`stopAsync` 等待进程真正退出后再启动新进程，修复重启时端口占用导致 ping 失败的问题。
-- **Bug 修复**：修复 `is_server_ready` TOCTOU 竞态、`_connect` 持锁阻塞、`stopAsync` 超时破坏 `stoppingIntentionally` 标志、`PollScheduler.stop()` 不重置 `isTicking` 等 5 个 bug。
-
-4.0.0 图表界面改进与用户体验优化：
-
-- **页面切换 tab 样式优化**：使用高对比度颜色和字重，页面切换更易识别。
-- **子变量删除支持**：支持直接删除子变量，无需先删除父变量。
-- **图表时间窗口扩展**：添加 120s（2 分钟）时间窗口选项，满足长时间趋势观察需求。
-- **图表高频刷新支持**：添加 20ms（50Hz）刷新频率选项，满足高频采样需求。
-- **调色板优化**：使用高对比度调色板，图表线条更显眼。
-
-4.0.1 拖拽限制修复与页面切换 tab 样式改进：
-
-- **移除拖拽限制**：允许拖出结构体、类、数组等任何类型的变量作为独立根变量。
-- **页面切换 tab 样式改进**：使用固定颜色（#3c3c3c/#007acc），确保在所有 VS Code 主题下可见。
-
-4.0.2 Watch 页面指示器样式优化：
-
-- **使用 layers 图标**：替代 list-flat，更具辨识度。
-- **添加表情符号**：label 添加 📄 表情符号，增加视觉效果。
-- **优化 description**：显示 "Page X of Y" 格式，更清晰。
-- **添加 tooltip**：显示详细信息，包含页面名称和变量数量。
-
-4.0.3 增强 Watch 页面指示器样式：
-
-- **使用装饰分隔线**：label 使用 ━━━ 分隔线装饰，增强视觉层次。
-- **优化 description 格式**：显示 "Page X/Y • N vars" 格式，更简洁。
-- **使用 Markdown tooltip**：tooltip 使用 Markdown 格式，显示更详细的信息。
-- **使用主题色**：图标使用 charts.foreground 主题色，保持与 VS Code 一致性。
-
-## 它解决什么问题
-
-很多 STM32 工程在 EIDE 中编译后得到 `.axf`，而实时变量解析需要 ELF 调试信息。手动找文件、转换 ELF、配置路径、启动后端服务，会打断调试节奏。
-
-这个扩展把流程串起来：
-
-1. 从当前 VS Code 工作区识别 EIDE 工程。
-2. 从 `.eide/eide.yml` 读取 EIDE 输出目录。
-3. 在 EIDE 输出目录中寻找 `.axf`。
-4. 使用 Keil `fromelf.exe` 生成 `.elf`。
-5. 把生成后的 ELF 路径写入工作区配置。
-6. 启动后端变量服务。
-7. 通过 OpenOCD TCL RPC 读取目标板内存。
-8. 在 VS Code 左侧栏实时刷新变量值。
-
-## 为什么使用 EIDE
-
-本扩展选择 EIDE 作为工程基础，主要有以下两点原因。
-
-### 1. EIDE 支持 Keil 工程兼容，便于旧项目平滑迁移
-
-EIDE 具有较好的 Keil 工程兼容能力，能够在较大程度上复用原有 Keil MDK 工程中的代码结构、头文件路径、启动文件、宏定义和编译配置，从而实现旧项目向 VS Code 开发环境的平滑迁移。这种兼容性降低了工程迁移成本，使已有代码能够继续使用，同时结合 VS Code 的插件生态、代码补全、Git 管理和调试扩展，提高了嵌入式项目的开发与维护效率。
-
-### 2. 支持 ARMClang 和 GCC 编译器，开发选择更加灵活
-
-EIDE 支持 ARMClang、ARMCC 和 GCC 等多种编译器工具链，开发者可以根据工程需求灵活选择编译环境。对于原有 Keil 项目，可以继续使用 ARMClang 以保证较高的代码兼容性；对于希望使用开源生态或跨平台开发的项目，也可以选择 GCC 工具链。这种多编译器支持增强了工程的适配能力，使嵌入式开发不再局限于单一 IDE 或单一工具链，提升了项目的灵活性、可移植性和可维护性。
-
-## 工作原理
-
-扩展由三层组成：
-
-```text
-VS Code 扩展界面
-  ↓ 命令 / TreeView / 配置
-TypeScript 扩展主进程
-  ↓ JSON stdin/stdout
-Python 后端服务 / server-windows.exe
-  ↓ OpenOCD TCL RPC
-OpenOCD
-  ↓ 读取目标板内存
-STM32 目标板
+```
+┌─────────────────────────────────────────────────────────────┐
+│  VS Code Extension UI                                       │
+│  ├── 📊 Real-time Variable Tree                             │
+│  ├── 📈 Live Chart Visualization                            │
+│  └── ⚡ Quick Variable Editing                              │
+└─────────────────────────────────────────────────────────────┘
+                          ↓
+┌─────────────────────────────────────────────────────────────┐
+│  Python Backend Service                                     │
+│  ├── 🔍 ELF/DWARF Parser                                    │
+│  └── 🔌 OpenOCD TCL RPC Client                              │
+└─────────────────────────────────────────────────────────────┘
+                          ↓
+┌─────────────────────────────────────────────────────────────┐
+│  STM32 Target Board                                         │
+│  └── 💾 Memory Read/Write via Debug Interface               │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-### 1. ELF 调试信息解析
+</div>
 
-后端使用 `pyelftools` 读取 ELF/DWARF 信息。它会扫描全局变量 DIE，解析变量名、类型、地址和成员结构，然后构建一棵变量树。
+## ✨ Key Features
 
-支持的典型类型：
+<div align="center">
 
-- 基础整数和浮点类型：`int`、`uint8_t`、`float`、`double` 等。
-- 枚举：显示数值，并在能匹配时显示枚举名。
-- 数组：按 `[0]`、`[1]` 形式展开。
-- 字符数组：作为字符串读取。
-- C 结构体：按成员展开。
-- C++ class：按可见成员展开，支持常见的 `DW_AT_specification`、`DW_AT_abstract_origin` 间接引用。
+| Feature | Description |
+|:-------:|:-----------|
+| 🔍 | **Real-time Variable Monitoring** - Watch variables update live at 250ms intervals |
+| 📈 | **Live Chart Visualization** - Plot multiple variables with customizable time windows |
+| ✏️ | **Quick Value Editing** - Modify variable values directly from the tree view |
+| 🔄 | **Auto AXF→ELF Conversion** - Seamless integration with EIDE build system |
+| 🎨 | **VS Code Theme Integration** - Adapts to your current VS Code theme |
+| 📊 | **Multi-page Support** - Organize variables across multiple watch pages |
+| 🚀 | **High Performance** - Optimized polling scheduler and batch memory reads |
 
-示例：
+</div>
 
-```cpp
-PID pid_yaw;
-```
+## 🚀 Quick Start
 
-添加 `pid_yaw` 后，变量树会显示：
+### Installation
 
-```text
-pid_yaw
-└─ pid
-   ├─ max_out
-   ├─ intergral_limit
-   ├─ deadband
-   ├─ Kp
-   ├─ Ki
-   ├─ Kd
-   ├─ output_fiter_factor
-   └─ improve
-```
+<div align="center">
 
-### 2. 地址解析
+#### Option 1: Install from GitHub Releases (Recommended)
 
-后端优先读取变量 DIE 里的 `DW_AT_location`。如果位置属性不可用，会尝试从符号表 `.symtab` 中匹配变量名。
+[![Download VSIX](https://img.shields.io/badge/📥_Download-v4.0.3-blue?style=for-the-badge&logo=github)](https://github.com/1581525057/stm32-vscode-Live-watch/releases/tag/v4.0.3)
 
-这对 C++ 很重要，因为 C++ 全局变量可能有符号修饰名。例如源码变量叫：
+</div>
 
-```cpp
-PID pid_yaw;
-```
+1. Download the latest `.vsix` file from [Releases](https://github.com/1581525057/stm32-vscode-Live-watch/releases)
+2. Open VS Code
+3. Press `Ctrl+Shift+P`, type `vsix`, select `Extensions: Install from VSIX...`
+4. Select the downloaded `.vsix` file
 
-符号表中可能是被修饰后的名字。扩展会用变量原名做后缀和包含匹配，尽量找到真实地址。
-
-### 3. 内存读取
-
-可直接读写的普通变量会被批量读取：
-
-- 普通 1/2/4 字节值使用 OpenOCD `mdw` 批量读。
-- 8 字节整数和 `double` 使用字节读取。
-- 字符串使用 `mdb` 读取字节并按 `\0` 截断。
-- 结构体和数组本身不直接读值，只展开内部成员。
-
-这样可以减少频繁刷新时的 OpenOCD 调用次数。
-
-### 4. 自动刷新
-
-扩展会按照 `stm32LiveWatch.refreshInterval` 定时刷新可直接读写的普通变量。默认间隔是 `250ms`。只有值发生变化时才触发界面刷新，减少 VS Code UI 重绘压力。
-
-## 界面说明
-
-安装后，左侧活动栏会出现 `STM32 Live Watch` 图标。进入后有两个同级面板，底部面板区域新增一个变量图表面板。
-
-### 1. stm32livewatch实时变量查看
-
-这个面板只放变量树。
-
-常用按钮在面板标题栏右侧：
-
-| 图标/命令 | 用途 |
-| --- | --- |
-| `Start Server` | 启动变量监视后端 |
-| `Stop Server` | 停止变量监视后端 |
-| `Add Variable` | 添加变量到监视列表 |
-| `Refresh Variables` | 清空缓存并手动刷新变量 |
-
-变量树中的交互：
-
-| 操作 | 行为 |
-| --- | --- |
-| 点击可展开变量 | 展开结构体、class、数组成员 |
-| 点击普通变量或成员变量 | 编辑变量值 |
-| 右键根变量 | 可重命名或删除根变量 |
-| 右键普通变量或成员变量 | 可编辑值 |
-
-说明：
-
-- 根变量是你主动添加的表达式，例如 `pid_yaw`。
-- 成员变量是扩展解析出来的子节点，例如 `pid_yaw.pid.Kp`。
-- 删除和重命名只作用于根变量，成员变量不需要单独删除。
-- 结构体、class、数组本身不能直接写值，需要展开后编辑里面的普通成员。
-
-### 2. 操作
-
-这个面板放不常用但重要的工程操作。
-
-| 操作 | 用途 |
-| --- | --- |
-| `Configure ELF Path` | 手动选择 `.elf` 文件，并写入 `stm32LiveWatch.elfPath` |
-| `Generate ELF from AXF` | 从 EIDE `.axf` 手动生成 `.elf` |
-
-`2. 操作` 是独立面板，不是变量树的子节点。变量树内容很多时，`1. stm32livewatch实时变量查看` 自己滚动，`2. 操作` 仍保持在左侧栏下面，方便随时展开使用。
-
-### 3. Variable Chart（变量图表）
-
-底部面板区域的实时折线图，用于观察变量随时间的变化趋势，适合 PID 调参、信号分析等场景。
-
-工具栏按钮：
-
-| 按钮 | 用途 |
-| --- | --- |
-| `+ Add` | 弹出输入框，手动输入变量名添加到图表 |
-| `⏸ Pause` | 暂停数据采集，图表冻结，可回看历史 |
-| `▶ Resume` | 恢复数据采集 |
-| `🗑 Clear` | 清除所有历史数据，重新开始 |
-| `Window` 下拉框 | 调整时间窗口：5s / 10s / 30s / 60s |
-| `Interval` 下拉框 | 调整图表采集频率：50ms / 100ms / 250ms |
-
-图例区域：
-
-- 显示每个变量的颜色、名称和当前值。
-- 点击 `✕` 可从图表中移除该变量。
-
-图表交互：
-
-| 操作 | 行为 |
-| --- | --- |
-| 鼠标悬停 | 显示精确值 tooltip |
-| 鼠标滚轮 | 缩放时间轴 |
-| 右键监视面板变量 | 选择 "Add to Chart" 添加到图表 |
-
-## 使用流程
-
-### 推荐流程
-
-1. 用 EIDE 正常编译 STM32 工程。
-2. 确认输出目录里有 `.axf`。
-3. 启动 OpenOCD，并确保 TCL RPC 端口可用。
-4. 在 VS Code 中启动 Cortex-Debug 调试。
-5. 打开左侧 `STM32 Live Watch`。
-6. 点击 `Start Server`。
-7. 点击 `Add Variable`，输入变量名。
-8. 展开变量，观察成员和值。
-9. 需要修改值时，点击可直接编辑的普通变量或成员变量，并输入新值。
-
-### 从编辑器右键添加变量
-
-在 C/C++ 代码中选中变量名，例如：
-
-```cpp
-pid_yaw
-```
-
-右键选择：
-
-```text
-STM32 Live Watch: Add Selected Variable
-```
-
-扩展会直接把选中的变量名加入监视列表。如果服务还没启动，会先尝试启动服务。
-
-### 使用变量图表
-
-1. 在监视面板中添加变量并确认有值。
-2. 在底部面板区域切换到 `Variable Chart` 标签页。
-3. 右键监视面板中的变量，选择 `Add to Chart`，或点击图表面板的 `+ Add` 手动输入变量名。
-4. 图表开始实时绘制折线，鼠标悬停可查看精确值。
-5. 使用 `Window` 下拉框调整时间范围，使用滚轮缩放时间轴。
-6. 点击 `⏸ Pause` 可冻结图表回看历史数据。
-7. 图例中的 `✕` 可移除不需要的变量。
-
-### 添加 C++ class 变量
-
-要添加对象实例名，不要添加类型名。
-
-例如源码是：
-
-```cpp
-PID pid_yaw;
-```
-
-应该添加：
-
-```text
-pid_yaw
-```
-
-不应该添加：
-
-```text
-PID
-```
-
-添加后可以继续展开 public 成员：
-
-```text
-pid_yaw.pid.Kp
-pid_yaw.pid.Ki
-pid_yaw.pid.Kd
-```
-
-### 手动配置 ELF
-
-如果扩展没有自动找到 ELF：
-
-1. 展开 `2. 操作`。
-2. 点击 `Configure ELF Path`。
-3. 选择当前固件对应的 `.elf` 文件。
-4. 再点击 `Start Server`。
-
-### 手动从 AXF 生成 ELF
-
-如果刚重新编译了 EIDE 工程，可以手动执行：
-
-```text
-Generate ELF from AXF
-```
-
-扩展会在 EIDE 输出目录中查找 `.axf`，并执行类似命令：
+#### Option 2: Build from Source
 
 ```bash
-fromelf.exe --elf --output build/app.elf build/app.axf
-```
+# Clone the repository
+git clone https://github.com/1581525057/stm32-vscode-Live-watch.git
+cd stm32-vscode-Live-watch
 
-生成成功后会更新 `stm32LiveWatch.elfPath`。
-
-## AXF 转 ELF 规则
-
-扩展只面向 EIDE 工程自动查找 AXF：
-
-1. 从当前工作区向下查找 `.eide/eide.yml`。
-2. 读取 EIDE 配置里的 `outDir`。
-3. 如果没有 `outDir`，默认使用 `build`。
-4. 只在 EIDE 输出目录中寻找 `.axf`。
-5. 不主动读取 `MDK-ARM` 目录中的 `.axf`，避免误用其他工程产物。
-6. 如果 `.axf` 比同名 `.elf` 更新，会重新转换。
-7. 转换成功后写回工作区配置。
-
-## 安装
-
-### 方法一：从 GitHub Releases 下载 VSIX 安装（推荐）
-
-1. 打开 [Releases 页面](https://github.com/1581525057/stm32-vscode-Live-watch/releases)。
-2. 下载最新版本的 `.vsix` 文件，例如 `stm32-vscode-Live-watch-4.0.3.vsix`。
-3. 打开 VS Code。
-4. 按 `Ctrl+Shift+P`，输入 `vsix`，选择 `Extensions: Install from VSIX...`。
-5. 在文件选择窗口中，找到刚才下载的 `.vsix` 文件，点击打开。
-6. 安装完成后，左侧活动栏会出现 `STM32 Live Watch` 图标，表示安装成功。
-
-### 方法二：从源码构建 VSIX
-
-如果你熟悉命令行，也可以自己打包：
-
-1. 克隆本仓库：
-   ```bash
-   git clone https://github.com/1581525057/stm32-vscode-Live-watch.git
-   cd stm32-vscode-Live-watch
-   ```
-
-2. 安装依赖并打包：
-   ```bash
-   npm install
-   npm run compile
-   npx vsce package
-   ```
-
-3. 执行完毕后，当前目录下会生成 `.vsix` 文件。
-
-4. 回到 VS Code，按 `Ctrl+Shift+P` → `Extensions: Install from VSIX...` → 选择刚生成的 `.vsix` 文件即可。
-
-## 使用前准备
-
-需要准备：
-
-- VS Code 1.85.0 或更高版本。
-- EIDE 工程，工程目录包含 `.eide/eide.yml`。
-- OpenOCD，TCL RPC 端口可访问。
-- Cortex-Debug，推荐用于启动 STM32 调试会话。
-- Keil `fromelf.exe`，用于把 `.axf` 转成 `.elf`。
-
-如果 `fromelf.exe` 不在系统 PATH 中，可以手动配置 `stm32LiveWatch.fromelfPath`。
-
-## 配置项
-
-在 VS Code 设置中搜索 `STM32 Live Watch`。
-
-| 配置项 | 默认值 | 用途 |
-| --- | --- | --- |
-| `stm32LiveWatch.elfPath` | 空 | 手动指定 ELF 文件路径 |
-| `stm32LiveWatch.fromelfPath` | 空 | 手动指定 Keil `fromelf.exe` 路径 |
-| `stm32LiveWatch.openocdHost` | `127.0.0.1` | OpenOCD TCL RPC 地址 |
-| `stm32LiveWatch.openocdPort` | `50001` | OpenOCD TCL RPC 端口 |
-| `stm32LiveWatch.refreshInterval` | `250` | 变量刷新间隔，单位毫秒 |
-| `stm32LiveWatch.pythonPath` | `python3` | 未使用可执行后端时的 Python 路径 |
-| `stm32LiveWatch.chartRefreshInterval` | `100` | 图表数据采集间隔，单位毫秒，最小 50 |
-| `stm32LiveWatch.chartTimeWindow` | `10` | 图表时间窗口，单位秒 |
-
-## 命令列表
-
-| 命令 | 说明 |
-| --- | --- |
-| `STM32 Live Watch: Start Server` | 启动变量监视服务 |
-| `STM32 Live Watch: Stop Server` | 停止变量监视服务 |
-| `STM32 Live Watch: Add Variable` | 添加变量到监视列表 |
-| `STM32 Live Watch: Add Selected Variable` | 添加编辑器中选中的变量 |
-| `STM32 Live Watch: Refresh Variables` | 手动刷新变量值 |
-| `STM32 Live Watch: Generate ELF from AXF` | 从 EIDE `.axf` 生成 `.elf` |
-| `STM32 Live Watch: Configure ELF Path` | 手动配置 `.elf` 文件 |
-| `STM32 Live Watch: Edit Variable Value` | 修改当前选中变量的值 |
-| `STM32 Live Watch: Rename Variable Expression` | 重命名根变量表达式 |
-| `STM32 Live Watch: Delete Variable` | 删除根变量 |
-| `STM32 Live Watch: Show Variables` | 聚焦变量面板 |
-| `STM32 Live Watch: Add to Chart` | 添加变量到图表（也可右键监视面板变量） |
-| `STM32 Live Watch: Show Chart Panel` | 聚焦图表面板 |
-
-## 构建和测试
-
-编译 TypeScript：
-
-```bash
+# Install dependencies and build
+npm install
 npm run compile
-```
-
-测试 AXF/ELF 路径解析：
-
-```bash
-npm run test:elf
-```
-
-测试 C++ 变量展开后端：
-
-```bash
-python -m unittest tests.test_server_cpp
-```
-
-打包 VS Code 扩展：
-
-```bash
 npx vsce package
 ```
 
-打包后端服务：
+### Prerequisites
 
-```bash
-npm run package:server
+<div align="center">
+
+| Requirement | Version | Purpose |
+|:-----------:|:-------:|:-------:|
+| ![VS Code](https://img.shields.io/badge/VS_Code-1.85.0+-007ACC?style=flat-square&logo=visual-studio-code) | 1.85.0+ | IDE |
+| ![Node.js](https://img.shields.io/badge/Node.js-16+-339933?style=flat-square&logo=node.js) | 16+ | Build Tool |
+| ![EIDE](https://img.shields.io/badge/EIDE-Latest-FF6B35?style=flat-square) | Latest | Project Management |
+| ![OpenOCD](https://img.shields.io/badge/OpenOCD-Any-00599C?style=flat-square) | Any | Debug Interface |
+
+</div>
+
+## 📸 Screenshots
+
+<div align="center">
+
+### Variable Tree View
+```
+┌─────────────────────────────────────┐
+│ 📊 ━━━ Watch1 ━━━     Page 1/2 • 3 │
+├─────────────────────────────────────┤
+│ ▸ pid_yaw { ··· }                   │
+│   ├─ Kp = 1.5                       │
+│   ├─ Ki = 0.3                       │
+│   └─ Kd = 0.1                       │
+│ ▸ sensor_data { ··· }               │
+│   ├─ temperature = 25.6             │
+│   └─ humidity = 60.2                │
+└─────────────────────────────────────┘
 ```
 
-## 常见问题
+### Live Chart
+```
+┌─────────────────────────────────────┐
+│ ⏸ Pause │ 🗑 Clear │ Window: 10s   │
+├─────────────────────────────────────┤
+│    ╭──╮                            │
+│ ───╯  ╰─────╮                      │
+│              ╰──────                │
+│ ● Kp: 1.5  ● Ki: 0.3  ● Kd: 0.1  │
+└─────────────────────────────────────┘
+```
 
-### 找不到 AXF
+</div>
 
-确认工程里存在 `.eide/eide.yml`，并检查 `outDir` 指向的目录中是否真的有 `.axf`。
+## 🎮 Usage
 
-### 找不到 fromelf.exe
+### Basic Workflow
 
-在 VS Code 设置中配置：
+```
+1️⃣  Build your EIDE project
+      ↓
+2️⃣  Start OpenOCD with TCL RPC
+      ↓
+3️⃣  Launch Cortex-Debug session
+      ↓
+4️⃣  Open STM32 Live Watch panel
+      ↓
+5️⃣  Click "Start Server"
+      ↓
+6️⃣  Add variables to watch
+      ↓
+7️⃣  Monitor & Analyze!
+```
 
-```text
+### Adding Variables
+
+**Method 1: Manual Input**
+- Click `+ Add Variable` button
+- Enter variable name (e.g., `pid_yaw`)
+
+**Method 2: From Editor**
+- Select variable name in C/C++ code
+- Right-click → `STM32 Live Watch: Add Selected Variable`
+
+### Chart Controls
+
+| Control | Action |
+|:-------:|:-------|
+| `+ Add` | Add variable to chart |
+| `⏸ Pause` | Freeze chart for inspection |
+| `▶ Resume` | Resume data collection |
+| `🗑 Clear` | Clear all chart data |
+| `Window` | Set time window (10s/30s/60s/120s) |
+| `Interval` | Set refresh rate (20ms/50ms/100ms/250ms) |
+
+## ⚙️ Configuration
+
+<div align="center">
+
+| Setting | Default | Description |
+|:-------:|:-------:|:-----------:|
+| `stm32LiveWatch.elfPath` | `""` | Manual ELF file path |
+| `stm32LiveWatch.fromelfPath` | `""` | Keil fromelf.exe path |
+| `stm32LiveWatch.openocdHost` | `127.0.0.1` | OpenOCD host |
+| `stm32LiveWatch.openocdPort` | `50001` | OpenOCD TCL RPC port |
+| `stm32LiveWatch.refreshInterval` | `250` | Variable refresh (ms) |
+| `stm32LiveWatch.chartRefreshInterval` | `100` | Chart refresh (ms) |
+| `stm32LiveWatch.chartTimeWindow` | `10` | Chart time window (s) |
+
+</div>
+
+## 📋 Commands
+
+<div align="center">
+
+| Command | Description |
+|:-------:|:-----------:|
+| `Start Server` | Start variable monitoring service |
+| `Stop Server` | Stop variable monitoring service |
+| `Add Variable` | Add variable to watch list |
+| `Add Selected Variable` | Add selected variable from editor |
+| `Refresh Variables` | Manual refresh variable values |
+| `Generate ELF from AXF` | Convert EIDE AXF to ELF |
+| `Configure ELF Path` | Manual ELF file configuration |
+| `Edit Variable Value` | Modify variable value |
+| `Add to Chart` | Add variable to chart visualization |
+
+</div>
+
+## 🔧 Supported Types
+
+```
+✅ Basic Types
+   ├── int, uint8_t, float, double, etc.
+   └── Enum: displays value and name
+
+✅ Composite Types
+   ├── Struct: expandable members
+   ├── Class: public members
+   ├── Array: indexed elements [0], [1], ...
+   └── Union: shared memory members
+
+✅ Special Types
+   ├── String: char arrays
+   └── Pointer: address display
+```
+
+## 📁 Project Structure
+
+```
+stm32-vscode-Live-watch/
+├── 📂 src/
+│   ├── 📄 extension.ts              # Extension entry point
+│   ├── 📄 elfResolver.ts            # ELF/DWARF parser
+│   ├── 📄 serverClient.ts           # Backend communication
+│   ├── 📄 pollScheduler.ts          # Polling scheduler
+│   ├── 📄 variableTreeDataProvider.ts # Variable tree UI
+│   ├── 📄 chartPanel.ts             # Chart webview
+│   ├── 📄 chartManager.ts           # Chart data management
+│   └── 📄 axfWatcher.ts             # AXF file watcher
+├── 📂 resources/
+│   ├── 🖼️ icon.jpg                  # Extension icon
+│   ├── 📄 chart.html                # Chart webview template
+│   └── 📄 chart.js                  # Chart rendering script
+├── 📂 bin/                          # Backend executables
+├── 📂 tests/                        # Test files
+└── 📄 package.json                  # Extension manifest
+```
+
+## 🐛 Troubleshooting
+
+<details>
+<summary><b>❓ Cannot find AXF file</b></summary>
+
+- Ensure your project has `.eide/eide.yml`
+- Check if `outDir` contains `.axf` files
+- Verify EIDE build completed successfully
+
+</details>
+
+<details>
+<summary><b>❓ Cannot find fromelf.exe</b></summary>
+
+Configure in VS Code settings:
+```
 stm32LiveWatch.fromelfPath = D:\Keil5\ARM\ARMCLANG\bin\fromelf.exe
 ```
+Or add `fromelf.exe` directory to system PATH.
 
-也可以把 `fromelf.exe` 所在目录加入系统 `PATH`。
+</details>
 
-### 能启动服务，但变量没有值
+<details>
+<summary><b>❓ Variables show no value</b></summary>
 
-检查三件事：
+Check:
+- ELF matches current firmware on target board
+- OpenOCD is running and accessible
+- Target board is in debug state (halted)
 
-- ELF 是否对应当前烧录到目标板的固件。
-- OpenOCD 是否正在运行。
-- 目标板是否处于可读取内存的调试状态。
+</details>
 
-### C++ class 展不开
+<details>
+<summary><b>❓ C++ class won't expand</b></summary>
 
-优先确认添加的是对象实例名，不是类名。
+- Add object instance name, not class name
+- ✅ Correct: `pid_yaw`
+- ❌ Wrong: `PID`
+- Ensure debug info is enabled (`-g` flag)
 
-正确：
+</details>
 
-```text
-pid_yaw
-```
+## 📊 Version History
 
-错误：
+<div align="center">
 
-```text
-PID
-```
+| Version | Date | Highlights |
+|:-------:|:----:|:-----------|
+| `4.0.3` | 2026-06-01 | Enhanced page indicator with decorative separators |
+| `4.0.2` | 2026-06-01 | Watch page indicator UI improvements |
+| `4.0.1` | 2026-06-01 | Remove drag restrictions for struct/class/array |
+| `4.0.0` | 2026-06-01 | Chart UI improvements, 120s window, 50Hz refresh |
+| `3.7.0` | 2026-05-11 | Unified poll scheduler, DWARF cache, SVG icons |
+| `3.5.0` | 2026-05-05 | AC5/AC6 compiler compatibility, performance optimization |
+| `3.3.0` | 2026-05-04 | Bug fixes, union support, enum fixes |
+| `3.1.0` | 2026-05-03 | Chart theme adaptation, statistics, export |
+| `3.0.0` | 2026-05-02 | Variable chart visualization module |
+| `2.1.0` | 2026-05-01 | Variable display optimization |
 
-如果仍然展不开，检查编译选项是否保留调试信息。建议调试阶段使用 `-g`，并降低优化等级。
+</div>
 
-### 修改变量失败
+## 🙏 Acknowledgments
 
-结构体、class、数组容器本身不能直接写入。请展开后修改里面的普通成员，例如：
+This project references [stm32-debug-helper](https://github.com/ZEALHT001/stm32-debug-helper). Thanks to the author for the source code ideas.
 
-```text
-pid_yaw.pid.Kp
-```
+## 📝 License
 
-### 不想自动转换 AXF
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-直接配置 `stm32LiveWatch.elfPath` 到固定 ELF 文件。只要该文件存在，扩展会优先使用它。
+---
 
-## 注意事项
+<div align="center">
 
-- AXF 自动转换只面向 EIDE 工程。
-- 高优化等级可能导致变量被优化掉，调试时建议保留调试信息。
-- ELF 必须与当前目标板固件一致，否则变量地址和值可能不正确。
-- OpenOCD TCL RPC 端口默认是 `50001`，需要与配置保持一致。
-- 实时刷新会读取目标板内存，刷新间隔过低可能增加调试链路压力。
+**Made with ❤️ by [ciyueYe](https://github.com/1581525057)**
 
-## 项目结构
+![GitHub Stars](https://img.shields.io/github/stars/1581525057/stm32-vscode-Live-watch?style=social)
+![GitHub Forks](https://img.shields.io/github/forks/1581525057/stm32-vscode-Live-watch?style=social)
 
-```text
-stm32-vscode-Live-watch/
-├─ src/
-│  ├─ extension.ts                 # 扩展入口、命令、视图和自动启动逻辑
-│  ├─ elfResolver.ts               # EIDE AXF 查找、fromelf 定位和 ELF 生成
-│  ├─ serverClient.ts              # VS Code 扩展与后端服务通信
-│  ├─ pollScheduler.ts             # 统一轮询调度器，合并变量树和图表读取
-│  ├─ variableTreeDataProvider.ts  # 变量视图和操作视图
-│  ├─ chartPanel.ts                # 图表面板 WebviewView Provider
-│  ├─ chartManager.ts              # 图表数据采集和变量管理
-│  ├─ axfWatcher.ts                # AXF 文件变更监听与 ELF 自动转换
-│  ├─ config.ts                    # 配置读取和兼容旧配置
-│  └─ models/
-├─ resources/
-│  ├─ icon.jpg
-│  ├─ icon.svg
-│  ├─ server.py                    # 后端变量读取服务
-│  ├─ chart.html                   # 图表面板 Webview HTML 模板
-│  ├─ chart.js                     # 图表面板 Chart.js 渲染脚本
-│  └─ chart.min.js                 # Chart.js 库文件
-├─ bin/                            # 后端可执行文件
-├─ tests/                          # Python 后端测试
-├─ package.json                    # 扩展清单、命令、视图、配置和脚本
-└─ README.md
-```
-
-## 发布信息
-
-- 扩展名：`stm32-vscode-Live-watch`
-- 发布者：`ciyueYe`
-- 版本：`4.0.3`
-- 仓库：<https://github.com/1581525057/stm32-vscode-Live-watch>
-
-## 致谢
-
-本项目参考了 [stm32-debug-helper](https://github.com/ZEALHT001/stm32-debug-helper)，感谢作者提供的源码思路。
+</div>
