@@ -1,0 +1,12 @@
+version: 1
+active_change: enhance-page-indicator-ui
+phase: archive
+checkpoint: apply-done
+project_profile:
+  languages: [typescript, html, css]
+  frameworks: [vscode-extension]
+  build_tool: npm
+  compile_command: npm run compile
+  test_command: npm test
+  structure: single-module
+  has_ci: false

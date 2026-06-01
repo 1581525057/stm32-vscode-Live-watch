@@ -843,12 +843,13 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
             // 页面信息项（如果有多个页面）
             if (this.pages.length > 1) {
                 const pageInfo = new vscode.TreeItem(
-                    `${this.activePage.name} (${this.activePageIndex + 1}/${this.pages.length})`,
+                    `📄 ${this.activePage.name}`,
                     vscode.TreeItemCollapsibleState.None
                 );
-                pageInfo.iconPath = new vscode.ThemeIcon('list-flat');
+                pageInfo.iconPath = new vscode.ThemeIcon('layers', new vscode.ThemeColor('charts.foreground'));
                 pageInfo.contextValue = 'pageInfo';
-                pageInfo.description = '';
+                pageInfo.description = `Page ${this.activePageIndex + 1} of ${this.pages.length}`;
+                pageInfo.tooltip = `Current Watch Page: ${this.activePage.name}\nPage ${this.activePageIndex + 1} of ${this.pages.length}\nWatched Variables: ${this.activePage.watchedPaths.length}`;
                 items.push(pageInfo);
             }
 
