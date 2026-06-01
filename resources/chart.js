@@ -17,10 +17,10 @@
         };
     }
 
-    // Catppuccin 调色板
+    // 高对比度调色板 - 更简洁显眼
     const COLORS = [
-        '#89b4fa', '#a6e3a1', '#f9e2af', '#f38ba8', '#cba6f7',
-        '#94e2d5', '#fab387', '#74c7ec', '#f5c2e7', '#b4befe'
+        '#3b82f6', '#22c55e', '#f59e0b', '#ef4444', '#a855f7',
+        '#06b6d4', '#f97316', '#8b5cf6', '#ec4899', '#14b8a6'
     ];
 
     // 二分查找第一个 >= cutoff 的位置（数据已按时间排序，O(log n)）
@@ -39,7 +39,8 @@
 
     // 状态
     let paused = false;
-    let timeWindow = 10; // 秒
+    let timeWindow = 10; // 默认 10 秒
+    let collectInterval = 20; // 默认 20ms (50Hz)
     let colorIndex = 0;
     const datasets = new Map(); // path -> { index, color, valueEl }
     // 增量追踪 Y 轴 min/max，避免全量扫描

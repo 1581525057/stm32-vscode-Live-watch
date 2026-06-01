@@ -154,22 +154,26 @@
         .page-tab {
             padding: 5px 14px;
             font-size: 12px;
-            color: var(--vscode-descriptionForeground, #999);
+            font-weight: 500;
+            color: var(--vscode-foreground, #cccccc);
             cursor: pointer;
             border-bottom: 2px solid transparent;
             white-space: nowrap;
             user-select: none;
             position: relative;
+            transition: all 0.15s ease;
         }
 
         .page-tab:hover {
-            color: var(--vscode-foreground, #ccc);
-            background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.05));
+            color: var(--vscode-foreground, #ffffff);
+            background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.08));
         }
 
         .page-tab.active {
-            color: var(--vscode-foreground, #fff);
+            color: var(--vscode-foreground, #ffffff);
+            font-weight: 600;
             border-bottom-color: var(--vscode-focusBorder, #007acc);
+            background: var(--vscode-list-activeSelectionBackground, rgba(0,122,204,0.15));
         }
 
         .page-tab .tab-close {
@@ -191,16 +195,17 @@
         .page-tab-add {
             background: none;
             border: none;
-            color: var(--vscode-descriptionForeground, #999);
+            color: var(--vscode-foreground, #cccccc);
             cursor: pointer;
             font-size: 14px;
             padding: 4px 8px;
             border-radius: 3px;
+            transition: all 0.15s ease;
         }
 
         .page-tab-add:hover {
-            color: var(--vscode-foreground, #ccc);
-            background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.05));
+            color: var(--vscode-foreground, #ffffff);
+            background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.08));
         }
     </style>
 </head>
@@ -217,15 +222,16 @@
         <div class="spacer"></div>
         <label>Window:</label>
         <select id="selWindow">
-            <option value="5">5s</option>
             <option value="10" selected>10s</option>
             <option value="30">30s</option>
             <option value="60">60s</option>
+            <option value="120">120s</option>
         </select>
         <label>Interval:</label>
         <select id="selInterval">
+            <option value="20" selected>20ms</option>
             <option value="50">50ms</option>
-            <option value="100" selected>100ms</option>
+            <option value="100">100ms</option>
             <option value="250">250ms</option>
         </select>
     </div>

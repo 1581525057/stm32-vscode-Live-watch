@@ -9,9 +9,10 @@ import { PollScheduler } from './pollScheduler';
 import { ChartViewProvider } from './chartPanel';
 import { ChartPage, loadChartPages, persistChartPages, MAX_PAGES, MAX_PAGE_NAME_LENGTH, createDefaultChartPage } from './models/page';
 
+// 高对比度调色板 - 与 chart.js 中保持一致
 const CHART_COLORS = [
-    '#89b4fa', '#a6e3a1', '#f9e2af', '#f38ba8', '#cba6f7',
-    '#94e2d5', '#fab387', '#74c7ec', '#f5c2e7', '#b4befe'
+    '#3b82f6', '#22c55e', '#f59e0b', '#ef4444', '#a855f7',
+    '#06b6d4', '#f97316', '#8b5cf6', '#ec4899', '#14b8a6'
 ];
 
 export class ChartManager {

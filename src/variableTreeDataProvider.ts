@@ -637,6 +637,34 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
         return this.rootVariables.some(variable => variable.path === path);
     }
 
+    /**
+     * 查找子变量的父变量路径
+     * 子变量路径格式：parentPath.member 或 parentPath[index]
+     */
+    private findParentPath(childPath: string): string | null {
+        // 尝试匹配根变量路径前缀
+        for (const rootVar of this.rootVariables) {
+            const rootPath = rootVar.path;
+            // 检查 childPath 是否以 rootPath 开头，且后面跟着 . 或 [
+            if (childPath.startsWith(rootPath)) {
+                const rest = childPath.slice(rootPath.length);
+                if (rest.startsWith('.') || rest.startsWith('[')) {
+                    return rootPath;
+                }
+            }
+        }
+        // 如果找不到根变量，尝试在 allVariables 中查找
+        for (const [path, info] of this.allVariables) {
+            if (info.hasChildren && childPath.startsWith(path)) {
+                const rest = childPath.slice(path.length);
+                if (rest.startsWith('.') || rest.startsWith('[')) {
+                    return path;
+                }
+            }
+        }
+        return null;
+    }
+
     async loadRootVariables(): Promise<void> {
         // 加载页面数据（含旧版迁移）
         const { pages, activeId } = loadWatchPages(this.workspaceState);
@@ -756,7 +784,19 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
 
     async deleteVariable(item: VariableTreeItem): Promise<void> {
         if (!item.isRoot) {
-            vscode.window.showInformationMessage('Please remove the root variable to delete this member.');
+            // 对于子变量，找到其父变量并移除
+            const childPath = item.variableInfo.path;
+            // 查找父变量：子变量路径格式为 parentPath.member 或 parentPath[index]
+            const parentPath = this.findParentPath(childPath);
+            if (parentPath) {
+                // 从父变量的缓存中移除该子变量
+                this.childrenCache.delete(parentPath);
+                // 从 allVariables 中移除
+                this.allVariables.delete(childPath);
+                this.valueCache.delete(childPath);
+                this.refresh();
+                vscode.window.showInformationMessage(`Removed child variable: ${childPath}`);
+            }
             return;
         }
 
