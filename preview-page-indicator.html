@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Watch 页面指示器 UI 预览</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: #1e1e1e;
+            color: #cccccc;
+            padding: 20px;
+        }
+
+        .preview-container {
+            max-width: 400px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            color: #ffffff;
+            font-size: 18px;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #3c3c3c;
+        }
+
+        .section {
+            margin-bottom: 30px;
+        }
+
+        .section-title {
+            color: #999;
+            font-size: 12px;
+            text-transform: uppercase;
+            margin-bottom: 10px;
+            letter-spacing: 1px;
+        }
+
+        /* VS Code Tree View 样式模拟 */
+        .tree-view {
+            background: #252526;
+            border: 1px solid #3c3c3c;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .tree-item {
+            display: flex;
+            align-items: center;
+            padding: 4px 8px;
+            min-height: 22px;
+            cursor: pointer;
+        }
+
+        .tree-item:hover {
+            background: #2a2d2e;
+        }
+
+        .tree-icon {
+            width: 16px;
+            height: 16px;
+            margin-right: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+        }
+
+        .tree-label {
+            flex: 1;
+            font-size: 13px;
+            color: #cccccc;
+        }
+
+        .tree-description {
+            font-size: 12px;
+            color: #999;
+            margin-left: 8px;
+        }
+
+        /* 当前实现（丑陋版本） */
+        .current-page-indicator {
+            background: #2d2d2d;
+            border-bottom: 1px solid #3c3c3c;
+        }
+
+        .current-page-indicator .tree-icon {
+            color: #c586c0;
+        }
+
+        .current-page-indicator .tree-label {
+            color: #cccccc;
+            font-weight: normal;
+        }
+
+        /* 改进方案 1：简洁风格 */
+        .improved-v1 {
+            background: #0e639c;
+            border-left: 3px solid #007acc;
+        }
+
+        .improved-v1 .tree-icon {
+            color: #ffffff;
+        }
+
+        .improved-v1 .tree-label {
+            color: #ffffff;
+            font-weight: 600;
+        }
+
+        .improved-v1 .tree-description {
+            color: #ffffff;
+            opacity: 0.8;
+        }
+
+        /* 改进方案 2：现代卡片风格 */
+        .improved-v2 {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            border: 1px solid #0f3460;
+            border-left: 4px solid #007acc;
+            margin: 4px;
+            border-radius: 4px;
+        }
+
+        .improved-v2 .tree-icon {
+            color: #00d4ff;
+        }
+
+        .improved-v2 .tree-label {
+            color: #ffffff;
+            font-weight: 600;
+        }
+
+        .improved-v2 .tree-description {
+            color: #00d4ff;
+            font-size: 11px;
+        }
+
+        /* 改进方案 3：VS Code 原生风格增强 */
+        .improved-v3 {
+            background: #37373d;
+            border-bottom: 2px solid #007acc;
+        }
+
+        .improved-v3 .tree-icon {
+            color: #dcdcaa;
+        }
+
+        .improved-v3 .tree-label {
+            color: #ffffff;
+            font-weight: 600;
+            font-size: 13px;
+        }
+
+        .improved-v3 .tree-description {
+            color: #dcdcaa;
+            font-size: 11px;
+        }
+
+        /* 改进方案 4：渐变高亮 */
+        .improved-v4 {
+            background: linear-gradient(90deg, #007acc 0%, #005f9e 100%);
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        }
+
+        .improved-v4 .tree-icon {
+            color: #ffffff;
+        }
+
+        .improved-v4 .tree-label {
+            color: #ffffff;
+            font-weight: 700;
+        }
+
+        .improved-v4 .tree-description {
+            color: #ffffff;
+            opacity: 0.9;
+        }
+
+        /* 变量项样式 */
+        .variable-item {
+            padding-left: 28px;
+        }
+
+        .variable-icon {
+            color: #4ec9b0;
+        }
+
+        .variable-value {
+            color: #b5cea8;
+            font-family: 'Consolas', 'Courier New', monospace;
+        }
+
+        /* 标签样式 */
+        .tag {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: 600;
+            margin-left: 8px;
+        }
+
+        .tag-current {
+            background: #007acc;
+            color: #ffffff;
+        }
+
+        .tag-proposed {
+            background: #2ea043;
+            color: #ffffff;
+        }
+
+        /* 分隔线 */
+        .divider {
+            height: 1px;
+            background: #3c3c3c;
+            margin: 10px 0;
+        }
+
+        /* 代码预览 */
+        .code-block {
+            background: #1e1e1e;
+            border: 1px solid #3c3c3c;
+            border-radius: 4px;
+            padding: 12px;
+            margin-top: 10px;
+            font-family: 'Consolas', 'Courier New', monospace;
+            font-size: 12px;
+            color: #d4d4d4;
+            overflow-x: auto;
+        }
+
+        .code-keyword {
+            color: #569cd6;
+        }
+
+        .code-string {
+            color: #ce9178;
+        }
+
+        .code-comment {
+            color: #6a9955;
+        }
+
+        .code-property {
+            color: #9cdcfe;
+        }
+    </style>
+</head>
+<body>
+    <div class="preview-container">
+        <h1>Watch 页面指示器 UI 预览</h1>
+
+        <!-- 当前实现 -->
+        <div class="section">
+            <div class="section-title">当前实现 <span class="tag tag-current">CURRENT</span></div>
+            <div class="tree-view">
+                <div class="tree-item current-page-indicator">
+                    <span class="tree-icon">📋</span>
+                    <span class="tree-label">📄 watch1</span>
+                    <span class="tree-description">Page 1 of 2</span>
+                </div>
+                <div class="tree-item variable-item">
+                    <span class="tree-icon variable-icon">●</span>
+                    <span class="tree-label">flag_meiling</span>
+                    <span class="tree-description variable-value">= 1</span>
+                </div>
+                <div class="tree-item variable-item">
+                    <span class="tree-icon variable-icon">●</span>
+                    <span class="tree-label">Flag1</span>
+                    <span class="tree-description variable-value">= 0</span>
+                </div>
+                <div class="tree-item variable-item">
+                    <span class="tree-icon variable-icon">●</span>
+                    <span class="tree-label">lift_auto</span>
+                    <span class="tree-description variable-value">= 1</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- 改进方案 -->
+        <div class="section">
+            <div class="section-title">改进方案 <span class="tag tag-proposed">PROPOSED</span></div>
+
+            <p style="color: #999; font-size: 12px; margin-bottom: 15px;">请选择你喜欢的风格：</p>
+
+            <!-- 方案 1：简洁蓝色 -->
+            <div style="margin-bottom: 20px;">
+                <div style="color: #cccccc; font-size: 13px; margin-bottom: 8px;">
+                    方案 1：简洁蓝色
+                </div>
+                <div class="tree-view">
+                    <div class="tree-item improved-v1">
+                        <span class="tree-icon">📂</span>
+                        <span class="tree-label">Watch1</span>
+                        <span class="tree-description">1/2 • 3 vars</span>
+                    </div>
+                    <div class="tree-item variable-item">
+                        <span class="tree-icon variable-icon">●</span>
+                        <span class="tree-label">flag_meiling</span>
+                        <span class="tree-description variable-value">= 1</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 方案 2：现代卡片 -->
+            <div style="margin-bottom: 20px;">
+                <div style="color: #cccccc; font-size: 13px; margin-bottom: 8px;">
+                    方案 2：现代卡片风格
+                </div>
+                <div class="tree-view">
+                    <div class="tree-item improved-v2">
+                        <span class="tree-icon">🗂️</span>
+                        <span class="tree-label">Watch1</span>
+                        <span class="tree-description">Page 1/2</span>
+                    </div>
+                    <div class="tree-item variable-item">
+                        <span class="tree-icon variable-icon">●</span>
+                        <span class="tree-label">flag_meiling</span>
+                        <span class="tree-description variable-value">= 1</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 方案 3：VS Code 原生增强 -->
+            <div style="margin-bottom: 20px;">
+                <div style="color: #cccccc; font-size: 13px; margin-bottom: 8px;">
+                    方案 3：VS Code 原生风格增强
+                </div>
+                <div class="tree-view">
+                    <div class="tree-item improved-v3">
+                        <span class="tree-icon">📁</span>
+                        <span class="tree-label">Watch1</span>
+                        <span class="tree-description">Page 1 of 2</span>
+                    </div>
+                    <div class="tree-item variable-item">
+                        <span class="tree-icon variable-icon">●</span>
+                        <span class="tree-label">flag_meiling</span>
+                        <span class="tree-description variable-value">= 1</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 方案 4：渐变高亮 -->
+            <div style="margin-bottom: 20px;">
+                <div style="color: #cccccc; font-size: 13px; margin-bottom: 8px;">
+                    方案 4：渐变高亮（强烈推荐）
+                </div>
+                <div class="tree-view">
+                    <div class="tree-item improved-v4">
+                        <span class="tree-icon">📊</span>
+                        <span class="tree-label">Watch1</span>
+                        <span class="tree-description">1/2 • 3 variables</span>
+                    </div>
+                    <div class="tree-item variable-item">
+                        <span class="tree-icon variable-icon">●</span>
+                        <span class="tree-label">flag_meiling</span>
+                        <span class="tree-description variable-value">= 1</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- 实现代码预览 -->
+        <div class="section">
+            <div class="section-title">实现代码预览（方案 4）</div>
+            <div class="code-block">
+<span class="code-comment">// 页面信息项</span>
+<span class="code-keyword">const</span> pageInfo = <span class="code-keyword">new</span> vscode.TreeItem(
+    <span class="code-string">`📊 ${this.activePage.name}`</span>,
+    vscode.TreeItemCollapsibleState.None
+);
+pageInfo.<span class="code-property">iconPath</span> = <span class="code-keyword">new</span> vscode.ThemeIcon(
+    <span class="code-string">'layers'</span>,
+    <span class="code-keyword">new</span> vscode.ThemeColor(<span class="code-string">'charts.foreground'</span>)
+);
+pageInfo.<span class="code-property">description</span> = <span class="code-string">`${this.activePageIndex + 1}/${this.pages.length} • ${count} variables`</span>;
+            </div>
+        </div>
+
+        <!-- 选择区域 -->
+        <div class="section" style="margin-top: 30px; padding: 15px; background: #2d2d2d; border-radius: 6px;">
+            <div style="color: #ffffff; font-weight: 600; margin-bottom: 10px;">你的选择：</div>
+            <div style="display: flex; flex-direction: column; gap: 8px;">
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                    <input type="radio" name="style" value="v1"> 方案 1：简洁蓝色
+                </label>
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                    <input type="radio" name="style" value="v2"> 方案 2：现代卡片
+                </label>
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                    <input type="radio" name="style" value="v3"> 方案 3：VS Code 原生增强
+                </label>
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                    <input type="radio" name="style" value="v4" checked> 方案 4：渐变高亮（强烈推荐）
+                </label>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
