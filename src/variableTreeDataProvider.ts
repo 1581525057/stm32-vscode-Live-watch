@@ -451,13 +451,7 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
             // 排序：移动根变量
             this.moveRootVariable(dragData.sourceIndex, targetIndex);
         } else {
-            // 禁止将结构体/数组容器提取为根变量
-            const draggedInfo = this.allVariables.get(dragData.path);
-            if (draggedInfo && draggedInfo.hasChildren) {
-                vscode.window.showInformationMessage('Cannot extract struct/array as root variable');
-                return;
-            }
-            // 提取：将子成员添加为新的根变量
+            // 提取：将子成员添加为新的根变量（支持任何类型，包括结构体、类、数组）
             await this.extractAsRootVariable(dragData.path, targetIndex);
         }
     }
