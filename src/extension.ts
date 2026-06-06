@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { affectsLiveWatchConfig, getConfigValue, getLiveWatchConfig } from './config';
 import { generateElfFromEideAxf, resolveElfPathWithAxf, ResolveElfResult } from './elfResolver';
-import { ServerClient } from './serverClient';
+import { ServerClient, ConnectionState } from './serverClient';
 import { PollScheduler } from './pollScheduler';
 import { OperationsTreeDataProvider, VariableTreeDataProvider, VariableTreeItem } from './variableTreeDataProvider';
 import { ChartManager } from './chartManager';
@@ -35,6 +35,41 @@ export function activate(context: vscode.ExtensionContext) {
     });
     variableTreeDataProvider = new VariableTreeDataProvider(serverClient, context.workspaceState, pollScheduler);
     operationsTreeDataProvider = new OperationsTreeDataProvider();
+
+    // 状态栏连接指示器
+    const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+    statusBarItem.name = 'STM32 Live Watch';
+    statusBarItem.command = 'stm32-live-watch.reconnectServer';
+    statusBarItem.tooltip = '点击重新连接';
+    context.subscriptions.push(statusBarItem);
+
+    function updateStatusBar(state: ConnectionState): void {
+        switch (state) {
+            case ConnectionState.Connected:
+                statusBarItem.text = '$(circle-filled) Live Watch';
+                statusBarItem.color = new vscode.ThemeColor('testing.iconPassed'); // 绿色
+                statusBarItem.show();
+                break;
+            case ConnectionState.Reconnecting:
+                statusBarItem.text = '$(sync~spin) 重连中...';
+                statusBarItem.color = new vscode.ThemeColor('testing.iconQueued'); // 黄色
+                statusBarItem.show();
+                break;
+            case ConnectionState.Disconnected:
+                statusBarItem.text = '$(circle-outline) Live Watch 断开';
+                statusBarItem.color = new vscode.ThemeColor('testing.iconFailed'); // 红色
+                statusBarItem.show();
+                break;
+        }
+    }
+
+    serverClient.onConnectionStateChanged(state => {
+        updateStatusBar(state);
+        operationsTreeDataProvider.updateConnectionState(state);
+    });
+    // 初始状态
+    updateStatusBar(serverClient.getConnectionState());
+    operationsTreeDataProvider.updateConnectionState(serverClient.getConnectionState());
     const chartManagerInstance = new ChartManager(serverClient, context.workspaceState, pollScheduler);
     chartManager = chartManagerInstance;
     const chartViewProvider = new ChartViewProvider(context.extensionUri, (msg) => chartManagerInstance.handleWebviewMessage(msg));
@@ -50,19 +85,19 @@ export function activate(context: vscode.ExtensionContext) {
                     const host = getConfigValue<string>('openocdHost', '127.0.0.1');
                     const port = getConfigValue<number>('openocdPort', 50001);
                     await serverClient.start(elfPath, host, port);
-                    // 等待服务器就绪
+                    // 等待服务器就绪（Python 启动 + ELF 解析可能较慢）
                     let pingSuccess = false;
-                    for (let i = 0; i < 10; i++) {
+                    for (let i = 0; i < 15; i++) {
                         try {
                             await serverClient.ping();
                             pingSuccess = true;
                             break;
                         } catch {
-                            await new Promise(resolve => setTimeout(resolve, 200));
+                            await new Promise(resolve => setTimeout(resolve, 300));
                         }
                     }
                     if (!pingSuccess) {
-                        throw new Error('Server failed to respond after 10 ping attempts');
+                        throw new Error('Server failed to respond after 15 attempts (~4.5s)');
                     }
                     await variableTreeDataProvider.loadRootVariables();
                     vscode.commands.executeCommand('setContext', 'stm32LiveWatch.serverRunning', true);
@@ -94,6 +129,85 @@ export function activate(context: vscode.ExtensionContext) {
         serverClient.stop();
         vscode.commands.executeCommand('setContext', 'stm32LiveWatch.serverRunning', false);
         vscode.window.showInformationMessage('STM32 Live Watch server stopped');
+    });
+
+    // 手动重连命令：优先轻量重连（仅重建 OpenOCD socket），失败再重启进程
+    let manualReconnectInProgress = false;
+    const reconnectServerCommand = vscode.commands.registerCommand('stm32-live-watch.reconnectServer', async () => {
+        // 防重入：正在重连中则跳过
+        if (manualReconnectInProgress) {
+            return;
+        }
+        if (!serverClient.isRunning()) {
+            // 服务器未运行，走正常启动流程
+            try {
+                await ensureServerRunning(true);
+            } catch (error) {
+                showStartServerError(error);
+            }
+            return;
+        }
+
+        manualReconnectInProgress = true;
+        try {
+            vscode.window.showInformationMessage('正在重新连接...');
+            variableTreeDataProvider.stopAutoRefresh();
+
+            // 先尝试轻量重连（仅重建 OpenOCD TCP socket，不重启进程）
+            let reconnected = false;
+            try {
+                reconnected = await serverClient.reconnectOpenocd();
+            } catch {
+                reconnected = false;
+            }
+
+            if (reconnected) {
+                // 轻量重连成功，ping 验证
+                let pingSuccess = false;
+                for (let i = 0; i < 3; i++) {
+                    try {
+                        await serverClient.ping();
+                        pingSuccess = true;
+                        break;
+                    } catch {
+                        await new Promise(resolve => setTimeout(resolve, 100));
+                    }
+                }
+                if (pingSuccess) {
+                    await variableTreeDataProvider.loadRootVariables();
+                    variableTreeDataProvider.startAutoRefresh();
+                    vscode.window.showInformationMessage('重新连接成功');
+                    return;
+                }
+            }
+
+            // 轻量重连失败，降级为重启进程
+            console.log('轻量重连失败，重启服务器进程...');
+            await serverClient.restart();
+            // 重试 ping 直到服务器就绪
+            let pingSuccess = false;
+            for (let i = 0; i < 15; i++) {
+                try {
+                    await serverClient.ping();
+                    pingSuccess = true;
+                    break;
+                } catch {
+                    await new Promise(resolve => setTimeout(resolve, 300));
+                }
+            }
+            if (!pingSuccess) {
+                throw new Error('服务器重启后未响应');
+            }
+            await variableTreeDataProvider.loadRootVariables();
+            variableTreeDataProvider.startAutoRefresh();
+            vscode.window.showInformationMessage('重新连接成功（已重启服务器）');
+        } catch (error) {
+            vscode.window.showErrorMessage(`重新连接失败: ${error}`);
+            // 失败时恢复轮询，避免卡死
+            try { variableTreeDataProvider.startAutoRefresh(); } catch { /* 忽略 */ }
+        } finally {
+            manualReconnectInProgress = false;
+        }
     });
 
     const generateElfCommand = vscode.commands.registerCommand('stm32-live-watch.generateElf', async () => {
@@ -385,6 +499,7 @@ export function activate(context: vscode.ExtensionContext) {
         debugTerminateDisposable,
         configChangeDisposable,
         themeChangeDisposable,
+        reconnectServerCommand,
         moreActionsCommand,
         addWatchPageCommand,
         renameWatchPageCommand,
@@ -484,19 +599,19 @@ async function ensureServerRunning(showSuccessMessage: boolean): Promise<void> {
         await applyResolvedElfPath(config, elfResult);
 
         await serverClient.start(elfPath, host, port);
-        // 重试 ping 直到服务器就绪，而非固定等待 500ms
+        // 重试 ping 直到服务器就绪（Python 启动 + ELF 解析可能较慢）
         let pingSuccess = false;
-        for (let i = 0; i < 5; i++) {
+        for (let i = 0; i < 15; i++) {
             try {
                 await serverClient.ping();
                 pingSuccess = true;
                 break;
             } catch {
-                await new Promise(resolve => setTimeout(resolve, 100));
+                await new Promise(resolve => setTimeout(resolve, 300));
             }
         }
         if (!pingSuccess) {
-            throw new Error('Server failed to respond to ping after 5 attempts');
+            throw new Error('Server failed to respond to ping after 15 attempts (~4.5s)');
         }
         await variableTreeDataProvider.loadRootVariables();
         vscode.commands.executeCommand('setContext', 'stm32LiveWatch.serverRunning', true);

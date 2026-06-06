@@ -24,9 +24,7 @@ export class ServerClient {
     private _onConnectionStateChanged: vscode.EventEmitter<ConnectionState> = new vscode.EventEmitter<ConnectionState>();
     readonly onConnectionStateChanged: vscode.Event<ConnectionState> = this._onConnectionStateChanged.event;
 
-    // 自动重连相关
-    private reconnectTimer: NodeJS.Timeout | null = null;
-    private reconnectInterval: number = 5000;
+    // 连接参数（保存用于 restart）
     private elfPath: string = '';
     private host: string = '127.0.0.1';
     private port: number = 50001;
@@ -43,60 +41,11 @@ export class ServerClient {
         return this._connectionState;
     }
 
-    /** 更新连接状态并触发事件 */
-    private updateConnectionState(state: ConnectionState): void {
+    /** 更新连接状态并触发事件（公开方法，供外部在检测到断连时调用） */
+    updateConnectionState(state: ConnectionState): void {
         if (this._connectionState !== state) {
             this._connectionState = state;
             this._onConnectionStateChanged.fire(state);
-        }
-    }
-
-    /** 加载重连配置 */
-    loadReconnectConfig(): void {
-        const config = vscode.workspace.getConfiguration('stm32LiveWatch');
-        this.reconnectInterval = Math.max(1000, config.get<number>('reconnectInterval', 5000));
-    }
-
-    /** 启动自动重连定时器 */
-    startAutoReconnect(): void {
-        if (this.reconnectTimer || this._connectionState === ConnectionState.Connected) {
-            return;
-        }
-
-        this.updateConnectionState(ConnectionState.Reconnecting);
-
-        this.reconnectTimer = setInterval(async () => {
-            if (this._connectionState === ConnectionState.Connected) {
-                this.stopAutoReconnect();
-                return;
-            }
-
-            try {
-                console.log('Attempting to reconnect...');
-                await this.start(this.elfPath, this.host, this.port);
-                console.log('Reconnected successfully');
-                this.stopAutoReconnect();
-            } catch (error) {
-                console.warn('Reconnect failed:', error);
-            }
-        }, this.reconnectInterval);
-    }
-
-    /** 停止自动重连定时器 */
-    stopAutoReconnect(): void {
-        if (this.reconnectTimer) {
-            clearInterval(this.reconnectTimer);
-            this.reconnectTimer = null;
-        }
-    }
-
-    /** 更新重连间隔 */
-    updateReconnectInterval(interval: number): void {
-        this.reconnectInterval = Math.max(1000, interval);
-        // 如果正在重连，重启定时器以使用新间隔
-        if (this.reconnectTimer) {
-            this.stopAutoReconnect();
-            this.startAutoReconnect();
         }
     }
 
@@ -138,11 +87,10 @@ export class ServerClient {
                 return;
             }
 
-            // 保存连接参数用于重连
+            // 保存连接参数用于 restart
             this.elfPath = elfPath;
             this.host = host;
             this.port = port;
-            this.loadReconnectConfig();
 
             const serverExe = this.getServerExecutable();
             const useExecutable = serverExe !== null;
@@ -202,14 +150,10 @@ export class ServerClient {
                 this.process = null;
                 this.updateConnectionState(ConnectionState.Disconnected);
 
-                // 仅在非主动停止时触发关闭回调并启动自动重连
+                // 仅在非主动停止时触发关闭回调（通知外部重置 UI 状态）
                 if (!this.stoppingIntentionally) {
                     if (this._onClose) {
                         this._onClose();
-                    }
-                    // 启动自动重连
-                    if (this.elfPath) {
-                        this.startAutoReconnect();
                     }
                 }
             });
@@ -293,6 +237,12 @@ export class ServerClient {
         return this.sendRequest('ping');
     }
 
+    /** 轻量重连：仅重建 server.py 到 OpenOCD 的 TCP socket，不重启进程 */
+    async reconnectOpenocd(): Promise<boolean> {
+        const result = await this.sendRequest('reconnect');
+        return result?.reconnected === true;
+    }
+
     async dumpDwarfVars(): Promise<any> {
         return this.sendRequest('list_all_dwarf_vars');
     }
@@ -321,13 +271,15 @@ export class ServerClient {
         this.stopAsync().catch(() => {});
     }
 
+    /** 重启服务器（停止后重新启动，复用已保存的连接参数） */
+    async restart(): Promise<void> {
+        await this.stopAsync();
+        await this.start(this.elfPath, this.host, this.port);
+    }
+
     /** 异步停止服务器，等待进程真正退出后返回 */
     stopAsync(): Promise<void> {
-        return new Promise<void>((resolve) => {
-            // 停止自动重连
-            this.stopAutoReconnect();
-
-            const proc = this.process;
+        return new Promise<void>((resolve) => {            const proc = this.process;
             if (!proc) {
                 this.cleanupAfterStop();
                 this.updateConnectionState(ConnectionState.Disconnected);
@@ -380,7 +332,6 @@ export class ServerClient {
     }
 
     dispose(): void {
-        this.stopAutoReconnect();
         this._onConnectionStateChanged.dispose();
     }
 }

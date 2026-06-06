@@ -44,6 +44,10 @@ class TclRpcClient:
         self.port = port
         self.sock: socket.socket | None = None
         self.lock = threading.Lock()
+        # 目标状态缓存：避免每次 batch_read 都查询 targets
+        self._target_state_cache: str = "unknown"
+        self._target_state_time: float = 0.0
+        self._target_state_ttl: float = 1.0  # 缓存 1 秒
         self._connect()
 
     def _connect(self) -> None:
@@ -54,6 +58,8 @@ class TclRpcClient:
             self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             self.sock.settimeout(0.1)
             self.sock.connect((self.host, self.port))
+            # 重连后使目标状态缓存失效
+            self._target_state_time = 0.0
         except Exception:
             self.sock = None
 
@@ -100,6 +106,24 @@ class TclRpcClient:
         with self.lock:
             return self._send_rpc_unlocked(cmd)
 
+    @staticmethod
+    def _parse_hex_response(raw_res: str, expected_size: int) -> bytes:
+        """解析 OpenOCD mdb 响应中的十六进制字节（复用解析逻辑）"""
+        hex_tokens = []
+        for line in raw_res.splitlines():
+            if ':' in line:
+                tokens = line.split(':', 1)[1].split()
+                for t in tokens:
+                    if len(t) == 2 and all(c in "0123456789abcdefABCDEF" for c in t):
+                        hex_tokens.append(t)
+        return bytes([int(h, 16) for h in hex_tokens[:expected_size]])
+
+    def reconnect(self) -> bool:
+        """重建 TCP socket 连接（轻量重连，不重启进程）"""
+        with self.lock:
+            self._connect()
+            return self.sock is not None
+
     def is_connected(self) -> bool:
         """持锁检查 socket 连通性，并发一个轻量 RPC 验证 OpenOCD 可达"""
         with self.lock:
@@ -110,35 +134,50 @@ class TclRpcClient:
             return bool(result)
 
     def get_target_state(self) -> str:
-        """查询目标状态，返回 'halted' 或 'running'"""
+        """查询目标状态，返回 'halted' 或 'running'（带缓存）"""
+        now = time.monotonic()
+        if now - self._target_state_time < self._target_state_ttl:
+            return self._target_state_cache
         with self.lock:
             raw = self._send_rpc_unlocked("capture \"targets\"")
             if "halted" in raw.lower():
-                return "halted"
-            return "running"
+                self._target_state_cache = "halted"
+            else:
+                self._target_state_cache = "running"
+            self._target_state_time = now
+            return self._target_state_cache
+
+    def invalidate_target_state(self) -> None:
+        """使目标状态缓存失效（halt/resume 后调用）"""
+        self._target_state_time = 0.0
 
     def halt(self) -> None:
         """暂停目标"""
         with self.lock:
             self._send_rpc_unlocked("halt")
+        self.invalidate_target_state()
 
     def resume(self) -> None:
         """恢复目标运行"""
         with self.lock:
             self._send_rpc_unlocked("resume")
+        self.invalidate_target_state()
 
     def batch_read(self, nodes: list[VariableNode]) -> list[Any]:
         if not nodes:
             return []
 
-        # MCU 复位后 OpenOCD 需要时间重新建立连接，等待目标就绪
-        if not self._wait_for_target_ready():
-            return ["N/A"] * len(nodes)
+        # 快速检查目标状态（使用缓存），仅在未知时才等待
+        state = self.get_target_state()
+        if state == "unknown":
+            if not self._wait_for_target_ready():
+                return ["N/A"] * len(nodes)
 
         return self._batch_read_attempt(nodes)
 
-    def _wait_for_target_ready(self, timeout: float = 2.0) -> bool:
-        """等待目标就绪（复位后），轮询 targets 命令直到目标响应"""
+    def _wait_for_target_ready(self, timeout: float = 0.5) -> bool:
+        """等待目标就绪（复位后），轮询 targets 命令直到目标响应。
+        缩短超时到 0.5s：正常情况第一次就成功，复位后才需要等待。"""
         deadline = time.monotonic() + timeout
         attempts = 0
         while time.monotonic() < deadline:
@@ -161,11 +200,12 @@ class TclRpcClient:
     def _batch_read_attempt(self, nodes: list[VariableNode]) -> list[Any]:
         """单次批量读取尝试"""
         with self.lock:
-            # 检查目标状态，运行时需要 halt 才能可靠读取内存
-            raw_state = self._send_rpc_unlocked("capture \"targets\"")
-            was_running = "halted" not in raw_state.lower()
+            # 使用缓存的目标状态，避免重复查询
+            was_running = self._target_state_cache != "halted"
             if was_running:
                 self._send_rpc_unlocked("halt")
+                self._target_state_cache = "halted"
+                self._target_state_time = time.monotonic()
 
             try:
                 # 记录原始索引，用于返回结果与输入对齐
@@ -192,15 +232,8 @@ class TclRpcClient:
                     start_addr = group[0][1].addr
                     total_size = group_end - start_addr
                     raw_res = self._send_rpc_unlocked(f'capture "mdb {hex(start_addr)} {total_size}"')
-                    hex_tokens = []
                     try:
-                        for line in raw_res.splitlines():
-                            if ':' in line:
-                                tokens = line.split(':', 1)[1].split()
-                                for t in tokens:
-                                    if len(t) == 2 and all(c in "0123456789abcdefABCDEF" for c in t):
-                                        hex_tokens.append(t)
-                        raw_bytes = bytes([int(h, 16) for h in hex_tokens[:total_size]])
+                        raw_bytes = self._parse_hex_response(raw_res, total_size)
                     except Exception:
                         raw_bytes = b""
 
@@ -225,19 +258,14 @@ class TclRpcClient:
             finally:
                 if was_running:
                     self._send_rpc_unlocked("resume")
+                    self._target_state_cache = "running"
+                    self._target_state_time = time.monotonic()
 
     def read_raw_bytes(self, addr: int, size: int) -> bytes:
         """底层方法：使用 mdb 读取指定长度的纯字节流"""
         raw_res = self._send_rpc(f'capture "mdb {hex(addr)} {size}"')
-        hex_tokens = []
         try:
-            for line in raw_res.splitlines():
-                if ':' in line:
-                    tokens = line.split(':', 1)[1].split()
-                    for t in tokens:
-                        if len(t) == 2 and all(c in "0123456789abcdefABCDEF" for c in t):
-                            hex_tokens.append(t)
-            return bytes([int(h, 16) for h in hex_tokens[:size]])
+            return self._parse_hex_response(raw_res, size)
         except Exception:
             return b""
 
@@ -255,15 +283,8 @@ class TclRpcClient:
         with self.lock:
             for addr, size in requests:
                 raw_res = self._send_rpc_unlocked(f'capture "mdb {hex(addr)} {size}"')
-                hex_tokens = []
                 try:
-                    for line in raw_res.splitlines():
-                        if ':' in line:
-                            tokens = line.split(':', 1)[1].split()
-                            for t in tokens:
-                                if len(t) == 2 and all(c in "0123456789abcdefABCDEF" for c in t):
-                                    hex_tokens.append(t)
-                    results.append(bytes([int(h, 16) for h in hex_tokens[:size]]))
+                    results.append(self._parse_hex_response(raw_res, size))
                 except Exception:
                     results.append(b"")
         return results
@@ -1198,6 +1219,9 @@ class DebugDataServer:
             path = request.get("path", "")
             value = str(request.get("value", ""))
             return {"ok": True, "result": {"path": path, "value": value}} if self.write_value(path, value) else {"ok": False, "error": f"Write failed for {path}"}
+        if command == "reconnect":
+            ok = self.rpc.reconnect()
+            return {"ok": True, "result": {"reconnected": ok}}
         if command == "is_server_ready":
             # 持锁 + 轻量 RPC 验证连通性，修复 TOCTOU 竞态条件
             is_ready = self.rpc.is_connected()

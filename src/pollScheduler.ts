@@ -41,10 +41,14 @@ export class PollScheduler implements vscode.Disposable {
     }
 
     /**
-     * 注销一个轮询源
+     * 注销一个轮询源，如果没有剩余源则停止定时器
      */
     unregisterSource(name: string): void {
         this.sources.delete(name);
+        // 没有活跃源时停止定时器，避免空转
+        if (this.sources.size === 0) {
+            this.stop();
+        }
     }
 
     /**
@@ -102,6 +106,11 @@ export class PollScheduler implements vscode.Disposable {
             return;
         }
         if (this.sources.size === 0) {
+            return;
+        }
+
+        // 检查服务器是否在运行，未运行则跳过本轮
+        if (!this.serverClient.isRunning()) {
             return;
         }
 

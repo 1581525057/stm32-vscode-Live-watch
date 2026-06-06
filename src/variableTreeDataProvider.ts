@@ -232,6 +232,12 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
     private valueCache: Map<string, any> = new Map();
     private childrenCache: Map<string, VariableInfo[]> = new Map(); // 缓存 listChildren 结果，避免每 250ms 重复 RPC
     private staleValueCache: Map<string, StaleValue> = new Map(); // 过时数据缓存
+    private cachedPathsToRead: string[] = []; // 缓存的可读路径列表，避免每轮重新计算
+    private pathsDirty = true; // 路径缓存是否需要重建
+
+    // 缓存容量上限，防止无限增长
+    private static readonly MAX_STALE_CACHE_SIZE = 500;
+    private static readonly MAX_CHILDREN_CACHE_SIZE = 200;
 
     // 多页面状态
     private pages: WatchPage[] = [];
@@ -530,13 +536,18 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
         if (!this.serverClient.isRunning() || this.allVariables.size === 0) {
             return [];
         }
-        const paths: string[] = [];
-        for (const [path, variable] of this.allVariables) {
-            if (!variable.hasChildren) {
-                paths.push(path);
+        // 仅在变量列表变化时重建路径缓存
+        if (this.pathsDirty) {
+            const paths: string[] = [];
+            for (const [path, variable] of this.allVariables) {
+                if (!variable.hasChildren) {
+                    paths.push(path);
+                }
             }
+            this.cachedPathsToRead = paths;
+            this.pathsDirty = false;
         }
-        return paths;
+        return this.cachedPathsToRead;
     }
 
     /**
@@ -560,8 +571,17 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
                 }
                 this.valueCache.set(result.path, result.value);
 
-                // 更新过时数据缓存
-                if (result.value !== undefined && result.value !== null) {
+                // 更新过时数据缓存（排除 N/A），超过上限时清理最旧的一半
+                if (result.value !== undefined && result.value !== null && result.value !== 'N/A') {
+                    if (this.staleValueCache.size >= VariableTreeDataProvider.MAX_STALE_CACHE_SIZE) {
+                        const evictCount = VariableTreeDataProvider.MAX_STALE_CACHE_SIZE / 2;
+                        let evicted = 0;
+                        for (const key of this.staleValueCache.keys()) {
+                            if (evicted >= evictCount) break;
+                            this.staleValueCache.delete(key);
+                            evicted++;
+                        }
+                    }
                     this.staleValueCache.set(result.path, {
                         value: result.value,
                         timestamp: now
@@ -610,6 +630,7 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
         for (const variable of variables) {
             this.allVariables.set(variable.path, variable);
         }
+        this.pathsDirty = true;
     }
 
     private rebuildVariableIndex(): void {
@@ -840,20 +861,25 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
 
             const items: vscode.TreeItem[] = [];
 
-            // 页面信息项（如果有多个页面）
+            // 页面信息项（多页时显示，VS Code 原生风格）
             if (this.pages.length > 1) {
+                // 圆点指示器：当前页用实心圆，其他页用空心圆
+                const dots = this.pages.map((_, i) =>
+                    i === this.activePageIndex ? '●' : '○'
+                ).join('');
+                const varCount = this.activePage.watchedPaths.length;
                 const pageInfo = new vscode.TreeItem(
-                    `━━━ ${this.activePage.name} ━━━`,
+                    this.activePage.name,
                     vscode.TreeItemCollapsibleState.None
                 );
-                pageInfo.iconPath = new vscode.ThemeIcon('layers', new vscode.ThemeColor('charts.foreground'));
+                pageInfo.iconPath = new vscode.ThemeIcon('folder', new vscode.ThemeColor('charts.foreground'));
                 pageInfo.contextValue = 'pageInfo';
-                pageInfo.description = `Page ${this.activePageIndex + 1}/${this.pages.length} • ${this.activePage.watchedPaths.length} vars`;
+                pageInfo.description = `${dots}  ${this.activePageIndex + 1}/${this.pages.length} · ${varCount}`;
                 pageInfo.tooltip = new vscode.MarkdownString(
-                    `**📊 Watch Page: ${this.activePage.name}**\n\n` +
-                    `- **Page:** ${this.activePageIndex + 1} of ${this.pages.length}\n` +
-                    `- **Variables:** ${this.activePage.watchedPaths.length}\n` +
-                    `- **Status:** Active`
+                    `**${this.activePage.name}**\n\n` +
+                    `- 页面: ${this.activePageIndex + 1} / ${this.pages.length}\n` +
+                    `- 变量: ${varCount}\n` +
+                    `- 状态: 活动中`
                 );
                 items.push(pageInfo);
             }
@@ -874,6 +900,16 @@ export class VariableTreeDataProvider implements vscode.TreeDataProvider<vscode.
             if (!children) {
                 children = await this.serverClient.listChildren(path);
                 if (children && children.length > 0) {
+                    // 超过上限时清理最旧的一半
+                    if (this.childrenCache.size >= VariableTreeDataProvider.MAX_CHILDREN_CACHE_SIZE) {
+                        const evictCount = VariableTreeDataProvider.MAX_CHILDREN_CACHE_SIZE / 2;
+                        let evicted = 0;
+                        for (const key of this.childrenCache.keys()) {
+                            if (evicted >= evictCount) break;
+                            this.childrenCache.delete(key);
+                            evicted++;
+                        }
+                    }
                     this.childrenCache.set(path, children);
                 }
             }
@@ -953,8 +989,19 @@ export class OperationsTreeDataProvider implements vscode.TreeDataProvider<vscod
     private _onDidChangeTreeData: vscode.EventEmitter<vscode.TreeItem | undefined | null | void> = new vscode.EventEmitter<vscode.TreeItem | undefined | null | void>();
     readonly onDidChangeTreeData: vscode.Event<vscode.TreeItem | undefined | null | void> = this._onDidChangeTreeData.event;
 
+    // 当前连接状态
+    private connectionState: ConnectionState = ConnectionState.Disconnected;
+
     refresh(): void {
         this._onDidChangeTreeData.fire();
+    }
+
+    /** 更新连接状态并刷新树 */
+    updateConnectionState(state: ConnectionState): void {
+        if (this.connectionState !== state) {
+            this.connectionState = state;
+            this.refresh();
+        }
     }
 
     getTreeItem(element: vscode.TreeItem): vscode.TreeItem {
@@ -966,10 +1013,46 @@ export class OperationsTreeDataProvider implements vscode.TreeDataProvider<vscod
             return [];
         }
 
+        // 顶部状态行
+        const statusItem = this.buildStatusItem();
+
         return [
+            statusItem,
             new OperationTreeItem('Configure ELF Path', 'file-code', 'stm32-live-watch.configureElfPath'),
             new OperationTreeItem('Generate ELF from AXF', 'tools', 'stm32-live-watch.generateElf')
         ];
+    }
+
+    private buildStatusItem(): vscode.TreeItem {
+        const item = new vscode.TreeItem('连接状态', vscode.TreeItemCollapsibleState.None);
+        item.contextValue = 'connectionStatus';
+
+        switch (this.connectionState) {
+            case ConnectionState.Connected:
+                item.label = '$(circle-filled) 已连接';
+                item.iconPath = new vscode.ThemeIcon('circle-filled', new vscode.ThemeColor('testing.iconPassed'));
+                item.description = 'OpenOCD';
+                break;
+            case ConnectionState.Reconnecting:
+                item.label = '$(sync~spin) 重连中...';
+                item.iconPath = new vscode.ThemeIcon('sync~spin', new vscode.ThemeColor('testing.iconQueued'));
+                item.description = '';
+                break;
+            case ConnectionState.Disconnected:
+            default:
+                item.label = '$(circle-outline) 未连接';
+                item.iconPath = new vscode.ThemeIcon('circle-outline', new vscode.ThemeColor('testing.iconFailed'));
+                item.description = '';
+                break;
+        }
+
+        // 点击触发重连
+        item.command = {
+            command: 'stm32-live-watch.reconnectServer',
+            title: '重新连接'
+        };
+
+        return item;
     }
 
     dispose(): void {
