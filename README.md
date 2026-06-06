@@ -7,7 +7,7 @@
 [![版本](https://img.shields.io/badge/版本-4.1.0-blue?style=flat-square)](https://github.com/1581525057/stm32-vscode-Live-watch/releases)
 [![VS Code](https://img.shields.io/badge/VS_Code-1.85.0+-007ACC?style=flat-square&logo=visual-studio-code)](https://code.visualstudio.com/)
 [![许可证](https://img.shields.io/badge/许可证-MIT-green?style=flat-square)](LICENSE)
-[![平台](https://img.shields.io/badge/平台-Win32-lightgrey?style=flat-square)](https://github.com/1581525057/stm32-vscode-Live-watch)
+[![平台](https://img.shields.io/badge/平台-Win11-lightgrey?style=flat-square)](https://github.com/1581525057/stm32-vscode-Live-watch)
 
 **中文** | [English](README_EN.md)
 
@@ -17,9 +17,33 @@
 
 </div>
 
-## 📖 简介
+## 📖 为什么做这个插件？
 
-`stm32-vscode-Live-watch` 是一个面向 STM32 调试阶段的 VS Code 扩展。它不会替代调试器，而是在现有 EIDE、Cortex-Debug、OpenOCD 工作流旁边增加一个更直接的实时变量观察界面。
+### 痛点
+
+Keil MDK 作为 STM32 开发的事实标准，其内置调试器多年来几乎未更新：界面古旧、操作卡顿、变量监视窗口功能单一。在调试 PID 参数、电机控制、传感器融合等需要频繁观测和修改变量的场景中，每次都要在 Keil 的 Watch 窗口里手动展开结构体、逐层翻找成员——效率极低，且无法直观看到变量随时间的变化趋势。
+
+更麻烦的是，**传统 Keil 工程 ≠ 过时代码**。大量成熟项目基于 Keil 工程构建，包含多年积累的驱动、协议栈和业务逻辑——但它们值得一个更好的调试体验。
+
+### 解决方案
+
+**EIDE** 是一个出色的 VS Code 嵌入式插件，它能直接导入 Keil 工程（`.uvprojx`），在不改变原有代码结构的前提下，将整个开发流程迁移到 VS Code 的现代化界面中。
+
+`stm32-vscode-Live-watch` 正是在这个工作流上补齐了最后一块短板——**实时变量调试**：
+
+| 对比 | Keil 内置调试 | STM32 Live Watch |
+|:----:|:------------:|:----------------:|
+| 界面 | 古旧 Windows 风格，不可定制 | VS Code 原生 UI，主题自适应 |
+| 变量监视 | 手动刷新，逐层展开 | 自动轮询 250ms 刷新，图表可视化 |
+| 操作流畅度 | 卡顿明显 | 流畅，优化的批量内存读取 |
+| 值编辑 | 右键菜单多步操作 | 树视图内直接编辑 |
+| 图表 | 无 | 多变量实时走势图，支持 20ms~250ms 刷新率 |
+| 多页面 | 无 | 支持多个 Watch 页面分组管理 |
+| 新老代码兼容 | — | 基于 ELF/DWARF，与 Keil/EIDE 工程完全兼容 |
+
+### 一句话总结
+
+> **不放弃传统 Keil 工程，老代码和新代码一起享受 VS Code 的现代化调试体验——实时修改变量、图表可视化、告别 Keil 的卡顿和软件来回切换。**
 
 <div align="center">
 
