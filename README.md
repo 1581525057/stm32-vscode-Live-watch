@@ -4,7 +4,7 @@
 
 **STM32 实时变量监视与图表可视化 VS Code 插件**
 
-[![版本](https://img.shields.io/badge/版本-4.0.3-blue?style=flat-square)](https://github.com/1581525057/stm32-vscode-Live-watch/releases)
+[![版本](https://img.shields.io/badge/版本-4.1.0-blue?style=flat-square)](https://github.com/1581525057/stm32-vscode-Live-watch/releases)
 [![VS Code](https://img.shields.io/badge/VS_Code-1.85.0+-007ACC?style=flat-square&logo=visual-studio-code)](https://code.visualstudio.com/)
 [![许可证](https://img.shields.io/badge/许可证-MIT-green?style=flat-square)](LICENSE)
 [![平台](https://img.shields.io/badge/平台-Win32-lightgrey?style=flat-square)](https://github.com/1581525057/stm32-vscode-Live-watch)
@@ -71,7 +71,7 @@
 
 #### 方式一：从 GitHub Releases 下载 VSIX 安装（推荐）
 
-[![下载 VSIX](https://img.shields.io/badge/📥_下载-v4.0.3-blue?style=for-the-badge&logo=github)](https://github.com/1581525057/stm32-vscode-Live-watch/releases/tag/v4.0.3)
+[![下载 VSIX](https://img.shields.io/badge/📥_下载-v4.1.0-blue?style=for-the-badge&logo=github)](https://github.com/1581525057/stm32-vscode-Live-watch/releases/tag/v4.1.0)
 
 </div>
 
@@ -302,6 +302,7 @@ stm32LiveWatch.fromelfPath = D:\Keil5\ARM\ARMCLANG\bin\fromelf.exe
 
 | 版本 | 日期 | 亮点 |
 |:----:|:----:|:-----|
+| `4.1.0` | 2026-06-06 | 删除自动重连，仅保留手动重连 |
 | `4.0.3` | 2026-06-01 | 增强页面指示器，添加装饰分隔线 |
 | `4.0.2` | 2026-06-01 | Watch 页面指示器 UI 优化 |
 | `4.0.1` | 2026-06-01 | 移除结构体/类/数组拖拽限制 |
